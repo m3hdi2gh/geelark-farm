@@ -1309,9 +1309,15 @@ def _look(client: Client, settings: Settings, book: Book,
 
 
 def _lanes(book: Book, warm: list[dict]) -> dict[str, dict[str, int]]:
-    """{lane: {warm, exits}}. A warm phone with no lane on it is a GPT
-    phone, as every phone was before there were lanes; an exit with no
-    lane counts for both."""
+    """{lane: {warm, exits, gmails}}. A warm phone with no lane on it is a
+    GPT phone, as every phone was before there were lanes; an exit with no
+    lane counts for both, and so does a Gmail kept for neither product.
+
+    `gmails` is what a build of the lane could claim now. Without it a
+    lane whose only free Gmails are kept for the other product was still
+    ordered builds, and each ended `no_usable_gmail` in a second, pass
+    after pass (the Gmails page, 2026-10-07). A pool that cannot count by
+    lane leaves it out, and the exits alone bound the lane, as before."""
     from . import purposes
 
     lanes = {p: {"warm": 0, "exits": 0} for p in purposes.ALL}
@@ -1319,9 +1325,16 @@ def _lanes(book: Book, warm: list[dict]) -> dict[str, dict[str, int]]:
         lane = purposes.normal(phone.get("purpose")) or purposes.GPT
         lanes[lane]["warm"] += 1
     for_lane = getattr(book.proxies, "for_lane", None)
+    free_now = getattr(getattr(book, "gmails", None), "free_now", None)
     for lane in purposes.ALL:
         lanes[lane]["exits"] = (len(for_lane(lane)) if for_lane is not None
                                 else len(book.proxies.available))
+        if callable(free_now):
+            try:
+                lanes[lane]["gmails"] = int(free_now(lane))
+            except Exception as exc:                              # noqa: BLE001
+                log.debug("could not count the %s lane's Gmails (%s)",
+                          lane, exc)
     return lanes
 
 
@@ -1359,7 +1372,11 @@ def _lanes_to_build(total: int, lanes: dict, targets: dict,
         short = (int(targets.get(lane, 0)) - int(lanes.get(lane, {}).get("warm", 0))
                  - int(coming.get(lane, 0)) - out[lane])
         exits = int(lanes.get(lane, {}).get("exits", 0)) - out[lane]
-        return min(short, exits)
+        # The Gmails the lane may take, when the pool could say (`_lanes`).
+        gmails = lanes.get(lane, {}).get("gmails")
+        if gmails is None:
+            return min(short, exits)
+        return min(short, exits, int(gmails) - out[lane])
 
     def owed(lane: str) -> bool:
         return int(urgent.get(lane, 0)) > out[lane] and room(lane) > 0

@@ -51,7 +51,7 @@ _PAGE = """<!doctype html>
 #: (amber) when anything is pending.
 _RAIL = (("/", "Dashboard", ""), ("/station", "Station", ""),
          ("/stock", "Stock", ""),
-         ("/pools/gmail", "Gmail Pool", "gmail"),
+         ("/pools/gmail", "Gmails", "gmail"),
          ("/pools/proxy", "Proxies", "proxy"),
          ("/pools/gpt", "Gpt Pool", "app"), ("/requests", "Requests", "pending"),
          ("/needs", "Needs attention", "needs"),
@@ -4598,6 +4598,12 @@ def _plural(n: int, one: str, many: str = "") -> str:
 #: button says "Start" beside a stopped service, the record says what
 #: was asked of a service that had been stopped.
 _CONTROL_SAID = {"start": "Start again"}
+#: The Gmails page's presses in Requests: what was asked, of how many.
+_GMAILS_PAGE_SAID = {"gmails_aside": "Set {} aside",
+                     "gmails_queue": "Put {} back in the queue",
+                     "gmails_mend": "Mark {} fixed",
+                     "gmails_keep_for": "Keep {}",
+                     "gmails_remove": "Remove {} to the archive"}
 
 #: A running row older than this shows a "stuck?" hint: no build takes
 #: twenty minutes, and the drain closes such rows after two budgets.
@@ -4655,6 +4661,29 @@ def describe(verb: str, payload: dict) -> tuple[str, str]:
         return f"Add {p.get('ref', '?')}", "from the customer panel"
     if verb == "withdraw_panel_account":
         return f"Withdraw {p.get('ref', '?')}", "the panel took it back"
+    if verb in _GMAILS_PAGE_SAID:
+        # The Gmails page's presses (2026-10-07): one request a press, about
+        # as many Gmails as were ticked.
+        n = len(p.get("ids") or [])
+        lane = {"gpt": "GPT", "spotify": "Spotify"}.get(str(p.get("lane") or ""))
+        head = _GMAILS_PAGE_SAID[verb]
+        if verb == "gmails_keep_for":
+            head = (f"Keep {{}} for {lane}" if lane else "Open {} to any product")
+        return head.format(_plural(n, "Gmail")), "on the Gmails page"
+    if verb == "gmail_save":
+        return (f"Save the details of Gmail #{p.get('id', '?')}"
+                + (" and mark it fixed" if p.get("fixed") else ""),
+                "on the Gmails page")
+    if verb == "gmails_add":
+        back = len(p.get("back") or [])
+        seller = p.get("seller") or ""
+        return (f"Add {_plural(len(rows), 'Gmail')}"
+                + (f", return {back} fixed" if back else ""),
+                f"batch {seller}" if seller else "on the Gmails page")
+    if verb == "gmails_revert":
+        return "Undo a change", "on the Gmails page"
+    if verb == "restore_gmail":
+        return f"Put Gmail #{p.get('id', '?')} back", "as it was, from the archive"
     if verb == "edit_gmail":
         return f"Edit {p.get('address', '?')}", "in the Gmails tab"
     if verb == "remove_gmail":

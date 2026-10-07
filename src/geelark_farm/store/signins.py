@@ -20,22 +20,40 @@ log = logging.getLogger(__name__)
 #: Attempts before a host, a model or a seller is judged at all.
 MIN_SAMPLE = 5
 
+#: How far a sign-in got before Google answered, read off the screens it
+#: went through (the router's trail): `c` once the code or the recovery
+#: address was asked for, `p` once the password was, `a` before either -
+#: and blank when no screen was read at all. The Gmails page says where
+#: Google let an address in or stopped it by these (2026-10-07).
+CODE_SCREENS = frozenset({"2fa_code_entry", "recovery_email_confirm"})
+PASSWORD_SCREENS = frozenset({"password_entry", "password_without_a_box"})
+
+
+def stage_of(screens) -> str:
+    """`a`, `p` or `c` for the screens a sign-in went through; "" for none."""
+    seen = {str(s) for s in screens or ()}
+    if seen & CODE_SCREENS:
+        return "c"
+    if seen & PASSWORD_SCREENS:
+        return "p"
+    return "a" if seen else ""
+
 
 def record(settings: Settings, *, serial: str, gmail: str, seller: str = "",
            host: str = "", model: str = "", position: int = 1,
            reason: str = "", ok: bool = False, seconds: float | None = None,
            captcha_rounds: int = 0, age_seconds: float | None = None,
            exit_country: str = "", touch: str = "", dumps: int = 0,
-           proxy_name: str = "", exit_ip: str = "") -> bool:
+           proxy_name: str = "", exit_ip: str = "", stage: str = "") -> bool:
     try:
         with connect(settings) as conn:
             conn.execute(
                 "INSERT INTO signins (machine, serial, gmail, seller, host,"
                 " model, position, reason, ok, seconds, captcha_rounds,"
                 " age_seconds, exit_country, touch, dumps, proxy_name,"
-                " exit_ip)"
+                " exit_ip, stage)"
                 " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,"
-                " %s, %s, %s, %s, %s, %s)",
+                " %s, %s, %s, %s, %s, %s, %s)",
                 (machine(), str(serial or ""), str(gmail or "").lower(),
                  str(seller or "")[:80], str(host or "")[:80],
                  str(model or "")[:80], int(position or 1),
@@ -43,7 +61,8 @@ def record(settings: Settings, *, serial: str, gmail: str, seller: str = "",
                  int(captcha_rounds or 0), age_seconds,
                  str(exit_country or "")[:8], str(touch or "")[:16],
                  int(dumps or 0), str(proxy_name or "")[:80],
-                 str(exit_ip or "")[:45]))
+                 str(exit_ip or "")[:45],
+                 stage if stage in ("a", "p", "c") else ""))
             conn.commit()
         return True
     except Exception as exc:                                      # noqa: BLE001

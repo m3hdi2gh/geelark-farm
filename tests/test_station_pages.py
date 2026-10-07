@@ -504,7 +504,8 @@ def test_the_station_assets_are_served_exactly_and_fold_into_the_rev():
         (assets.CSS + "\0" + assets.JS).encode("utf-8")).hexdigest()[:12]
     assert assets.REV == assets._rev(assets.CSS, assets.JS,
                                      assets.STATION_CSS, assets.STATION_JS,
-                                     assets.PROXIES_CSS, assets.PROXIES_JS)
+                                     assets.PROXIES_CSS, assets.PROXIES_JS,
+                                     assets.GMAILS_CSS, assets.GMAILS_JS)
     # The Station's file with the rail's appended: the admin's Station
     # draws the console's rail (2026-10-02).
     assert assets.STATION_CSS == (STATIC / "station.css").read_text(

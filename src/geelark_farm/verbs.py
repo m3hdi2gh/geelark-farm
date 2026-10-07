@@ -1747,9 +1747,237 @@ def remove_gmail(book, ledger, settings, payload, client):
     kept = {name: str(resource.values.get(name) or "")
             for name in ("Address", "Password", book.gmails.SECRET_COLUMN,
                          "Seller", "Purchase Date")}
+    # Its id in the archive, so Undo puts the very row back - both of its
+    # factors, its place and its tries - rather than a fresh one
+    # (restore_gmail, 2026-10-07).
+    kept["Id"] = resource.store_id
     book.gmails.delete_row(resource, by=_by(payload))
     return ("done", f"{address} removed from the pool by {_by(payload)} - "
                     f"archived, not deleted", {"removed": kept})
+
+
+# ------------------------------------------------------- the Gmails page
+#: The Gmails page's presses (2026-10-07): store writes of milliseconds,
+#: each guarded by where a Gmail stands now (store.gmail_desk), so a press
+#: made on a page drawn a minute ago never moves a Gmail a build took
+#: since. Each answers which Gmails it moved and how they were before -
+#: the detail its Undo (`gmails_revert`) takes back - and why the rest
+#: stayed where they are.
+DESK_VERBS = ("gmails_aside", "gmails_queue", "gmails_mend",
+              "gmails_keep_for", "gmails_remove", "gmail_save")
+#: How long after a press its Undo is still offered and taken.
+UNDO_MINUTES = 15
+_LEFT = {"phone": "on a phone", "spent": "spent", "gone": "no longer in the pool",
+         "same": "already that way",
+         "unreadable": "with details the farm cannot read"}
+
+
+def _plural_gmails(n: int) -> str:
+    return f"{n} Gmail" + ("" if n == 1 else "s")
+
+
+def _desk_answer(got: dict, did: str, by: str) -> tuple:
+    """(status, sentence, detail) for one press of the page: the sentence
+    for Requests, the detail for the page and its Undo."""
+    changed, left = got.get("changed") or [], got.get("left") or {}
+    stayed = {}
+    for why in left.values():
+        stayed[why] = stayed.get(why, 0) + 1
+    rest = "; ".join(f"{n} {_LEFT.get(w, w)}" for w, n in sorted(stayed.items()))
+    said = (f"{_plural_gmails(len(changed))} {did} by {by}"
+            + (f" ({rest})" if rest else ""))
+    detail = {"ids": [c["id"] for c in changed],
+              "left": {str(k): v for k, v in left.items()},
+              "changes": changed}
+    return "done", said, detail
+
+
+def _desk_refused(exc) -> tuple:
+    return "refused", str(exc), None
+
+
+def gmails_aside(book, ledger, settings, payload, client):
+    """Set aside by hand: the free and waiting Gmails named go out of the
+    queue until a person turns them on again."""
+    from .store import gmail_desk
+
+    try:
+        got = gmail_desk.aside(settings, payload.get("ids"), by=_by(payload))
+    except gmail_desk.Refused as exc:
+        return _desk_refused(exc)
+    return _desk_answer(got, "set aside", _by(payload))
+
+
+def gmails_queue(book, ledger, settings, payload, client):
+    """Back in the queue: the Gmails named that are out of it go in again -
+    a waiting one set aside waits again for the hour it had."""
+    from .store import gmail_desk
+
+    try:
+        got = gmail_desk.queue(settings, payload.get("ids"), by=_by(payload))
+    except gmail_desk.Refused as exc:
+        return _desk_refused(exc)
+    return _desk_answer(got, "back in the queue", _by(payload))
+
+
+def gmails_mend(book, ledger, settings, payload, client):
+    """Marked fixed: refused Gmails mended by the seller or by hand go back
+    to the pool as fresh stock, their tries started again."""
+    from .store import gmail_desk
+
+    try:
+        got = gmail_desk.mend(settings, payload.get("ids"), by=_by(payload))
+    except gmail_desk.Refused as exc:
+        return _desk_refused(exc)
+    return _desk_answer(got, "marked fixed", _by(payload))
+
+
+def gmails_keep_for(book, ledger, settings, payload, client):
+    """Kept for one product, or for any again: builds for the other product
+    pass these Gmails by."""
+    from .store import gmail_desk
+
+    lane = str(payload.get("lane") or "").strip().lower()
+    try:
+        got = gmail_desk.keep_for(settings, payload.get("ids"), lane,
+                                  by=_by(payload))
+    except gmail_desk.Refused as exc:
+        return _desk_refused(exc)
+    word = (f"kept for {gmail_desk.LANE_WORD[lane]}" if lane
+            else "open to any product")
+    status, said, detail = _desk_answer(got, word, _by(payload))
+    detail["lane"] = lane
+    return status, said, detail
+
+
+def gmails_remove(book, ledger, settings, payload, client):
+    """Out of the pool and into the archive, whole: only Gmails no phone
+    has and none spent."""
+    from .store import gmail_desk
+
+    try:
+        got = gmail_desk.remove(settings, payload.get("ids"), by=_by(payload))
+    except gmail_desk.Refused as exc:
+        return _desk_refused(exc)
+    return _desk_answer(got, "removed to the archive", _by(payload))
+
+
+def gmail_save(book, ledger, settings, payload, client):
+    """One Gmail's details as its form left them - and, asked to, marked
+    fixed in the same go. The sentence names what changed, never a value."""
+    from .store import gmail_desk
+
+    try:
+        # None is a field the person did not touch (gmail_desk.save).
+        got = gmail_desk.save(
+            settings, int(payload.get("id") or 0),
+            password=payload.get("password"), key=payload.get("key"),
+            recovery=payload.get("recovery"), note=payload.get("note"),
+            fixed=bool(payload.get("fixed")), by=_by(payload))
+    except (gmail_desk.Refused, ValueError) as exc:
+        return _desk_refused(exc)
+    words = got["said"] or "nothing different"
+    said = (f"{got['address']} saved by {_by(payload)}: {words}"
+            + ("; marked fixed" if got["mended"] else "")
+            + ("; it was not refused, so it is not marked fixed"
+               if got["unfixable"] else ""))
+    return "done", said, {"ids": [got["id"]], "said": got["said"],
+                          "mended": got["mended"],
+                          "unfixable": got["unfixable"],
+                          "changes": got["changed"]}
+
+
+def gmails_add(book, ledger, settings, payload, client):
+    """A paste from the Gmails page: new Gmails into a batch, kept for a
+    product if one was chosen, and refused ones of the pool back fixed
+    with the details on their lines. Every line is judged on its own; the
+    ones refused say why."""
+    from .store import gmail_desk
+
+    try:
+        got = gmail_desk.add(
+            settings, list(payload.get("rows") or []),
+            seller=str(payload.get("seller") or ""),
+            lane=str(payload.get("lane") or ""), by=_by(payload),
+            by_id=_uid(payload) or None, back=list(payload.get("back") or []),
+            carry=list(payload.get("carry") or []))
+    except gmail_desk.Refused as exc:
+        return _desk_refused(exc)
+    added, returned, refused = got["added"], got["returned"], got["refused"]
+    bits = []
+    if added:
+        bits.append(f"{_plural_gmails(len(added))} added to "
+                    f"{got['seller'] or 'no batch'}")
+    if returned:
+        bits.append(f"{_plural_gmails(len(returned))} back fixed")
+    if refused:
+        bits.append(f"{len(refused)} refused")
+    said = (", ".join(bits) or "nothing added") + f" by {_by(payload)}"
+    return ("done" if added or returned else "failed"), said, {
+        "added": [a["id"] for a in added],
+        "addresses": [a["address"] for a in added],
+        "returned": [{"id": r["id"], "said": r["said"], "mended": bool(r["mended"])}
+                     for r in returned],
+        # Not `refused`: Requests draws that key as one line of text each.
+        "left_out": refused,
+        "ids": [r["id"] for r in returned],
+        "carried": [c["id"] for c in got["carried"]],
+        "lane": got["lane"],
+        "changes": [c for r in returned for c in r["changed"]]}
+
+
+def restore_gmail(book, ledger, settings, payload, client):
+    """Undo of a Remove: the archived Gmail back in the pool exactly as it
+    left, under its own id - unless its address is in the pool again."""
+    from .store import gmail_desk
+
+    raw = str(payload.get("id") or "")
+    if not raw.isdecimal():
+        return "refused", "No Gmail was named.", None
+    got = gmail_desk.restore(settings, int(raw), by=_by(payload))
+    if got is None:
+        return ("refused", "It cannot come back: it is no longer in the archive,"
+                           " or its address is in the pool again.", None)
+    return ("done", f"{got['address']} put back as it was by {_by(payload)}",
+            {"ids": [got["id"]]})
+
+
+def gmails_revert(book, ledger, settings, payload, client):
+    """The page's Undo: the presses named, taken back - by the person who
+    made them, within UNDO_MINUTES, and each Gmail only if nothing has
+    moved it since. The rest stay as they are now, and the sentence says
+    how many."""
+    import datetime
+
+    from .store import actions as store_actions
+    from .store import gmail_desk
+
+    who = _uid(payload)
+    reqs = sorted({int(r) for r in payload.get("reqs") or []
+                   if str(r).strip().isdecimal()})
+    changes, took = [], []
+    soon = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(
+        minutes=UNDO_MINUTES)
+    for req in reqs:
+        row = store_actions.one(settings, req)
+        if (row is None or row.get("verb") not in DESK_VERBS
+                or row.get("status") != "done"
+                or int(row.get("requested_by") or 0) != who
+                or not row.get("requested_at") or row["requested_at"] < soon):
+            continue
+        detail = row.get("detail") if isinstance(row.get("detail"), dict) else {}
+        changes.extend(detail.get("changes") or [])
+        took.append(req)
+    if not took:
+        return ("refused", "That change can no longer be taken back here - "
+                           "it is older, someone else's, or not a change "
+                           "of this page.", None)
+    got = gmail_desk.revert(settings, changes, by=_by(payload))
+    back, moved = got["back"], got["moved"]
+    said = (f"{_plural_gmails(len(back))} put back as they were by "
+            f"{_by(payload)}" + (f"; {len(moved)} had moved on since and "
+                                 f"stay as they are" if moved else ""))
+    return "done", said, {"reqs": took, "back": back, "moved": moved}
 
 
 def _app_row(book, payload, *, delivered_goes=False):
@@ -2992,6 +3220,15 @@ VERBS = {
     "remove_gmail_group": remove_gmail_group,
     "free_gmail": free_gmail,
     "refund_gmail": refund_gmail,
+    "gmails_aside": gmails_aside,
+    "gmails_queue": gmails_queue,
+    "gmails_mend": gmails_mend,
+    "gmails_keep_for": gmails_keep_for,
+    "gmails_remove": gmails_remove,
+    "gmail_save": gmail_save,
+    "gmails_add": gmails_add,
+    "gmails_revert": gmails_revert,
+    "restore_gmail": restore_gmail,
     "free_app": free_app,
     "add_gpt": add_gpt,
     "add_spotify": add_spotify,
@@ -3054,6 +3291,12 @@ for _lane in (control, boot_phone, test_proxy, test_all_proxies,
               refund_gmail,
               # The Station's give-back and call-off: store writes of
               # milliseconds, the same shape as a refund (2026-09-29).
-              give_back, call_off_build):
+              give_back, call_off_build,
+              # The Gmails page's presses: guarded store writes of
+              # milliseconds that never touch a Gmail a phone has
+              # (store.gmail_desk, 2026-10-07).
+              gmails_aside, gmails_queue, gmails_mend, gmails_keep_for,
+              gmails_remove, gmail_save, gmails_add, gmails_revert,
+              restore_gmail):
     _lane.lane_safe = True
 del _lane

@@ -18,7 +18,8 @@ import time
 import pytest
 
 import geelark_farm.web.app as app_mod
-from geelark_farm.web import assets
+from geelark_farm.store import gmail_desk
+from geelark_farm.web import assets, gmails_read
 
 #: What `read.pool_rows` hands the manager: one free row and one held,
 #: per pool, which is enough for every question the sheet asks - a card
@@ -738,25 +739,28 @@ def _gmail_active(monkeypatch, seen=None, queued=None, on_phone=None):
     return seen
 
 
+_GMAILS_STATE = {"day": {"iso": "2026-10-07", "tag": "7OCT", "word": "7 Oct"},
+                 "archived": 0, "firstSignin": "", "days": [], "bytry": [],
+                 "G": {"t": {}, "d": {}, "a": {}}, "GS": {"t": {}, "d": {}, "a": {}},
+                 "V": {"t": {}, "d": {}, "a": {}}, "VP": {"t": {}, "d": {}, "a": {}},
+                 "VPB": {}, "batch": {}, "rows": []}
+
+
 def test_the_rail_shows_the_stock_counts_and_lights_the_page(web,
                                                              monkeypatch):
     _gmail_active(monkeypatch)
+    # The Gmails page (2026-10-07) is its own document; the rail it wears
+    # is the console's, lit on its link and counting the free Gmails.
+    monkeypatch.setattr(gmails_read, "state", lambda s, fresh=False: _GMAILS_STATE)
+    monkeypatch.setattr(gmail_desk, "scrub_old", lambda *a, **k: 0)
     client = web()
     client.login()
     status, _, body = client.request("GET", "/pools/gmail")
     assert status == 200
     assert ('href="/pools/gmail" class="rail-link here" '
             'aria-current="page"') in body
+    assert '<span class="rail-lbl">Gmails</span>' in body
     assert '<span class="rail-n">3</span>' in body     # gmail free count
-    assert "q1@x.com" in body and "q2@x.com" in body, "queued is the default"
-    assert '<b class="figure" style="color:var(--green)">2</b> free' in body
-    assert "enough for the next 2 builds" in body
-    assert 'Queued<span class="n" style="color:var(--green)">2</span>' in body, \
-        "four pills, each count in the colour of what the view holds"
-    assert 'href="/pools/gmail?view=errored"' in body
-
-    _, _, body = client.request("GET", "/pools/gmail?view=on_phone")
-    assert "on@x.com" in body and '<a href="/phones/1551">1551</a>' in body
 
 
 def test_an_operator_has_the_dashboard_and_one_phone_and_nothing_else(
@@ -836,6 +840,8 @@ def test_an_admin_keeps_every_page(web, monkeypatch):
     """The counterweight. Taking the console away from an operator must
     not take it away from the person who runs it."""
     _gmail_active(monkeypatch)
+    monkeypatch.setattr(gmails_read, "state", lambda s, fresh=False: _GMAILS_STATE)
+    monkeypatch.setattr(gmail_desk, "scrub_old", lambda *a, **k: 0)
     client = web()
     client.login()
     assert client.request("GET", "/pools/gmail")[0] == 200
@@ -848,64 +854,6 @@ def test_buttons_stay_hidden_until_the_flag_and_the_permission_agree(
     client.login()
     _, _, body = client.request("GET", "/pools/gmail")
     assert "/pools/gmail/preview" not in body, "flag off: no form"
-
-
-@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
-def test_the_queued_row_shows_its_secret_and_password_and_can_be_edited(
-        web, monkeypatch):
-    """Everything the sheet keeps about an account, in the row: the value
-    it answers a challenge with and which kind that is, the password, and
-    the two buttons that change or remove it."""
-    import geelark_farm.store.actions as actions_mod
-
-    _gmail_active(monkeypatch, queued=[
-        _gmail_row("key@x.com", id=11, password="pw-one",
-                   totp_secret="JBSWY3DPEHPK3PXP", recovery_email=""),
-        _gmail_row("rec@x.com", id=12, password="pw-two", has_totp=False,
-                   has_recovery=True, totp_secret="",
-                   recovery_email="backup@x.com"),
-        _gmail_row("bare@x.com", id=13, password="", has_totp=False,
-                   totp_secret="", recovery_email="")])
-    client = web()
-    client.login()
-    _, _, body = client.request("GET", "/pools/gmail")
-    assert "<th>secret</th><th>password</th>" in body, "named, not '2fa'"
-    assert "JBSWY3DPEHPK3PXP" in body and ">authenticator<" in body
-    assert "backup@x.com" in body and ">recovery<" in body
-    assert ">no second factor<" in body, "and the row to notice is loud"
-    assert "pw-one" in body and "pw-two" in body
-    assert 'href="/pools/gmail?view=queued&edit=11">Edit</a>' in body
-    assert body.count('action="/pools/gmail/remove"') == 3
-
-    # Edit draws that one row as a form, over every column
-    _, _, body = client.request("GET", "/pools/gmail?view=queued&edit=12")
-    assert '<tr class="editrow" data-key="gmail:' in body and 'colspan="6"' in body
-    assert 'name="new_address" value="rec@x.com"' in body
-    assert 'name="password" value="pw-two"' in body
-    assert 'name="secret" value="backup@x.com"' in body
-    assert 'name="seller" value="egypt"' in body
-    assert 'name="purchased" value="2026-08-30"' in body
-    assert '<datalist id="sellers">' in body, "the sellers already known"
-    assert body.count('href="/pools/gmail?view=queued">Cancel</a>') == 1
-
-    got = {}
-    monkeypatch.setattr(actions_mod, "enqueue",
-                        lambda s, **k: got.update(k) or 81)
-    monkeypatch.setattr(actions_mod, "pending_for", lambda s, **k: None)
-    status, headers, _ = client.request(
-        "POST", "/pools/gmail/edit",
-        _form(csrf=client.csrf(), address="rec@x.com",
-              new_address="rec2@x.com", password="pw-new",
-              secret="other@x.com", seller="usa", purchased="2026-09-01",
-              back="/pools/gmail?view=queued"))
-    assert status == 303
-    assert dict(headers)["Location"] == \
-        "/pools/gmail?view=queued&said=queued:81"
-    assert got["verb"] == "edit_gmail"
-    assert got["payload"]["address"] == "rec@x.com"
-    assert got["payload"]["new_address"] == "rec2@x.com"
-    assert got["payload"]["secret"] == "other@x.com"
-    assert got["payload"]["purchased"] == "2026-09-01"
 
 
 @pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
@@ -942,115 +890,6 @@ def test_removing_a_gmail_asks_once_with_the_address(web, monkeypatch):
               back="/evil"))
     assert dict(headers)["Location"] == "/pools/gmail?said=queued:82", \
         "only the pool's own views are places to come back to"
-
-
-@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
-def test_the_add_panel_offers_a_paste_and_a_one_by_one_way_in(
-        web, monkeypatch):
-    _gmail_active(monkeypatch)
-    client = web()
-    client.login()
-    _, _, body = client.request("GET", "/pools/gmail")
-    assert body.count('action="/pools/gmail/preview"') == 1, \
-        "one way in: a line typed into the box is the same keystrokes"
-    assert "add one by hand" not in body
-    assert 'name="pasted"' in body and 'class="addbox"' in body
-    assert '<option value="egypt">egypt</option>' in body
-    assert 'name="new_seller" placeholder="or a new seller"' in body
-
-
-def test_each_view_shows_one_list_and_pages_it(web, monkeypatch):
-    """Four views, one table each - the queued stock, what is signed in,
-    what was spent, what the seller owes back."""
-    on_phone = [_gmail_row("a@x.com", "ready", serial="1551",
-                           phone_status="ready"),
-                _gmail_row("b@x.com", "ready", serial="1552",
-                           phone_status="building"),
-                _gmail_row("c@x.com", "ready", serial="1553",
-                           phone_status="incomplete"),
-                _gmail_row("d@x.com", "in_use", serial="1554",
-                           phone_status="building")]
-    seen = _gmail_active(monkeypatch, on_phone=on_phone)
-    client = web()
-    client.login()
-
-    _, _, body = client.request("GET", "/pools/gmail?view=on_phone&page=2")
-    assert seen == {"view": "on_phone", "seller": "", "page": 2}
-    assert '<a href="/phones/1551">1551</a>' in body
-    assert '<span class="badge ready">Ready</span>' in body
-    assert '<span class="badge info">Building</span>' in body
-    assert '<span class="badge attn">Incomplete</span>' in body
-    assert '<span class="badge in_use">signing in</span>' in body
-    assert 'name="pasted"' not in body, "the add box belongs to Queued"
-
-    _, _, body = client.request("GET", "/pools/gmail?view=queued")
-    assert "q1@x.com" in body and "the keeper claims from the top" in body
-
-
-def test_an_empty_pool_says_what_to_do_about_it(web, monkeypatch):
-    _gmail_active(monkeypatch, queued=[])
-    client = web()
-    client.login()
-    _, _, body = client.request("GET", "/pools/gmail")
-    assert "paste a seller&#x27;s sheet above" in body
-
-
-def test_the_errored_view_filters_by_seller_and_offers_the_refund_list(
-        web, monkeypatch):
-    seen = _gmail_active(monkeypatch)
-    asked = {}
-
-    def errored_addresses(settings, seller=""):
-        asked["seller"] = seller
-        return ["bad1@x.com", "bad2@x.com"]
-
-    monkeypatch.setattr(app_mod.read, "errored_addresses", errored_addresses)
-    client = web()
-    client.login()
-    status, _, body = client.request(
-        "GET", "/pools/gmail?view=errored&seller=egypt&page=2")
-    assert status == 200
-    assert seen == {"view": "errored", "seller": "egypt", "page": 2}
-    assert "captcha <b" in body and "wrong 2fa <b" in body, \
-        "the tally, in words"
-    assert 'color:var(--amber);font-size:12.5px">captcha</span>' in body
-    assert 'color:var(--red);font-size:12.5px">wrong 2fa</span>' in body, \
-        "a wrong secret is the seller's fault and is coloured red"
-    assert "showed a CAPTCHA" in body, "what happened, from the verdict"
-    assert "page 2 of 3" in body
-    assert 'href="/pools/gmail?view=errored&seller=egypt&page=1">← newer' \
-        in body
-    assert 'href="/pools/gmail?view=errored&seller=egypt&page=3">older' \
-        in body
-    assert 'href="/pools/gmail/refund.txt?seller=egypt">Copy 2 to claim back' \
-        in body
-    # The two piles read differently now: one comes back on its own,
-    # the other is money (the operator, 2026-09-12).
-    assert "back in the queue" in body and "try 2 of 3" in body
-    assert "To claim back" in body
-    assert "action=" not in body.split("To claim back")[1][:80], (
-        "the two buttons need the permission; this user has none")
-
-    status, headers, text = client.request(
-        "GET", "/pools/gmail/refund.txt?seller=egypt")
-    assert status == 200 and asked == {"seller": "egypt"}
-    assert dict(headers)["Content-Type"].startswith("text/plain")
-    assert text == "bad1@x.com\nbad2@x.com\n"
-
-
-def test_the_used_view_pages_and_links_the_phone(web, monkeypatch):
-    seen = _gmail_active(monkeypatch)
-    client = web()
-    client.login()
-    status, _, body = client.request("GET", "/pools/gmail?view=used")
-    assert status == 200 and seen["page"] == 1
-    assert '<a href="/phones/1490">1490</a>' in body
-    assert "Aug 30 " in body, "used-at through the owner's clock"
-    assert "retired with the phone" in body
-    assert "page 1 of 2" in body and "older →" in body
-    assert 'href="/pools/gmail?view=used&seller=&page=2"' in body
-    _, _, body = client.request("GET", "/pools/gmail?view=used&page=2")
-    assert seen["page"] == 2 and "← newer" in body
 
 
 def test_the_gpt_delivered_view_searches_and_pages(web, monkeypatch):
@@ -3074,28 +2913,6 @@ def test_what_happened_shows_the_instruction_not_the_paragraph(
 
 
 @pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
-def test_the_by_hand_folds_are_not_forms_inside_forms(web, monkeypatch):
-    """A form inside a form is not HTML: the parser drops the inner tag,
-    and its button then submits the outer one. Both pools' by-hand folds
-    shipped that way (2026-09-04)."""
-    import re
-
-    _gmail_active(monkeypatch)
-    _gpt_active(monkeypatch, waiting=[_app_row("a@x.com")])
-    client = web()
-    client.login()
-    _, _, body = client.request("GET", "/pools/gpt")
-    assert "<summary>add one by hand</summary>" in body, "the gpt fold"
-    for path in ("/pools/gmail", "/pools/gpt"):
-        status, _, body = client.request("GET", path)
-        assert status == 200, path
-        depth = 0
-        for token in re.findall(r"</?form", body):
-            depth += 1 if token == "<form" else -1
-            assert depth in (0, 1), f"{path}: a form inside a form"
-
-
-@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
 def test_with_manual_login_off_the_gpt_pool_says_accounts_log_in_on_their_own(
         web, monkeypatch):
     _gpt_active(monkeypatch, waiting=[_app_row("c@x.com")])
@@ -3478,7 +3295,7 @@ def test_every_page_a_person_sees_carries_the_one_script(web, monkeypatch):
     client.login()
     # The script is on every page a signed-in person sees - once, as a
     # link under its own hash, rather than 76KB of source in the body.
-    for path in ("/", "/pools/gmail", "/pools/gpt",
+    for path in ("/", "/pools/gpt",
                  "/phones", "/requests", "/events", "/logs"):
         status, _, body = client.request("GET", path)
         assert status == 200, path
@@ -3492,7 +3309,7 @@ def test_every_page_a_person_sees_carries_the_one_script(web, monkeypatch):
     # operator, 2026-09-20).
     moves = {"/": "farm", "/requests": "farm", "/events": "farm",
              "/logs": "logs"}
-    for path in ("/", "/pools/gmail", "/pools/gpt",
+    for path in ("/", "/pools/gpt",
                  "/phones", "/requests", "/events", "/logs"):
         _, _, body = client.request("GET", path)
         want = moves.get(path)
@@ -8501,9 +8318,10 @@ def test_the_pool_pages_are_handed_the_sentence_and_the_reader():
     # whose Run answers "phone 4435 is taken ..." in the verb's words
     # (2026-09-27).
     handler = inspect.getsource(app)
-    # The Proxy Pool's call went with its page (2026-10-02): the Proxies
-    # page answers its presses in JSON, each with the verb's own sentence.
-    assert handler.count("said_note=self._said_note(") == 6, (
+    # The Proxy Pool's call went with its page (2026-10-02), and the Gmail
+    # Pool's with its (2026-10-07): the Proxies and Gmails pages answer
+    # their presses in JSON, each with the verb's own sentence.
+    assert handler.count("said_note=self._said_note(") == 5, (
         "every pool page is handed the settled row's own sentence")
 
 

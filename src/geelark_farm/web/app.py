@@ -222,16 +222,26 @@ class _Handler(BaseHTTPRequestHandler):
                 addresses = read.errored_addresses(
                     self.settings, seller=first.get("seller", ""))
                 return self._text(200, "\n".join(addresses) + "\n")
+            # The Gmails page (2026-10-07): the prototype the user approved,
+            # its own document in the admin rail, in the Gmail Pool's
+            # place. Its state, one Gmail's details for an admin's drawer,
+            # and the archive are JSON for its script.
+            if path == "/pools/gmail/state":
+                return self._gmails_state(first)
+            if path == "/pools/gmail/secret":
+                return self._gmails_secret(user, first)
+            if path == "/pools/gmail/archive":
+                from . import gmails_read
+
+                return self._json(200, dict(gmails_read.archive(
+                    self.settings, q=first.get("q", "")), ok=True))
             if path == "/pools/gmail":
-                editing = first.get("edit", "")
-                return self._html(200, pages.gmail_pool_page(
-                    read.gmail_pool(self.settings,
-                                    view=first.get("view", "queued"),
-                                    seller=first.get("seller", ""),
-                                    page=_page_number(first)),
-                    user, said=first.get("said", ""), advice=_advice,
-                    editing=int(editing) if editing.isdigit() else 0,
-                    said_note=self._said_note(first.get("said", ""))))
+                from ..store import gmail_desk
+                from . import gmail_pages, gmails_read
+
+                gmail_desk.scrub_old(self.settings)
+                return self._html(200, gmail_pages.gmails_page(
+                    gmails_read.state(self.settings, fresh=True), user))
             # The Proxies page (2026-10-02): the prototype the user called
             # final, its own document in the admin rail - it took the place
             # of the Proxy Pool's four lists. Its state and its archive are
@@ -1267,6 +1277,12 @@ class _Handler(BaseHTTPRequestHandler):
         if str(kept.get("Status") or "").strip().lower() == "delivered":
             return self._redirect("/?said=kept_delivered")
         secret = str(kept.get("Secret") or kept.get("2FA Secret") or "").strip()
+        if kind == "gmail" and str(kept.get("Id") or "").isdecimal():
+            # The archive has the whole row: it comes back as it was, both
+            # of its factors with it (2026-10-07).
+            return self._act(user, permission, "restore_gmail",
+                             {"id": int(kept["Id"])}, idem=f"undo-{req}",
+                             back="/")
         if kind == "spotify":
             payload = {"rows": [{"address": kept["Address"],
                                  "password": kept.get("Password") or ""}],
@@ -1621,6 +1637,207 @@ class _Handler(BaseHTTPRequestHandler):
         word = str(row.get("status") or "")
         return {"said": "pending" if word in ("queued", "running") else word,
                 "req": int(req), "note": str(row.get("result") or "")}
+
+    # -------------------------------------------------------- the Gmails page
+    def _gmails_state(self, first: dict) -> None:
+        """The Gmails page's state for its next draw - a 304 when nothing
+        moved, since an open page asks every twenty seconds - and how each
+        request it waits on stands (`?req=1,2`)."""
+        from ..store import actions as store_actions
+        from . import assets, gmails_read
+
+        wanted = [int(x) for x in str(first.get("req") or "").split(",")
+                  if x.strip().isdecimal()][:40]
+        if not wanted:
+            answer = gmails_read.state(self.settings)
+            tag = gmails_read.etag({"s": answer, "r": assets.REV})
+            if (self.headers.get("If-None-Match") or "") == tag:
+                self.send_response(304)
+                self.send_header("ETag", tag)
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                return None
+            return self._json(200, {"ok": True, "state": answer,
+                                    "rev": assets.REV}, etag=tag)
+        # The requests first, then the pool: a request that ended is drawn
+        # with the pool it left, never with one read before it ran.
+        reqs, ended = {}, False
+        for req in wanted:
+            row = store_actions.one(self.settings, req)
+            if row is None:
+                continue
+            reqs[str(req)] = _gmail_outcome(row)
+            ended = ended or reqs[str(req)]["status"] not in ("queued", "running")
+        answer = gmails_read.state(self.settings, fresh=ended)
+        return self._json(200, {"ok": True, "state": answer,
+                                "rev": assets.REV, "reqs": reqs})
+
+    def _gmails_refusal(self, user: dict) -> str:
+        """Why this person's press on the Gmails page cannot go, or ""."""
+        from ..store.users import may
+
+        if not self.settings.web_mutations:
+            return "Actions are not switched on yet - nothing was changed."
+        if not may(user, "may_add_gmail"):
+            return "You may not change the Gmails - nothing was changed."
+        return ""
+
+    def _gmails_answer(self, out: dict) -> None:
+        """A press's outcome and the pool as it now stands. The press is
+        written by now: if the pool cannot be read this moment, the answer
+        goes without it and the page's next poll brings it."""
+        from ..store import gmail_desk
+        from . import gmails_read
+
+        gmails_read.forget()
+        ok = out.get("status") in ("done", "queued", "running")
+        answer = dict(out, ok=ok)
+        try:
+            answer["state"] = gmails_read.state(self.settings, fresh=True)
+        except Exception as exc:                                  # noqa: BLE001
+            log.warning("the Gmails page's state did not read after a press"
+                        " (%s); the page's next poll brings it", exc)
+        # The typed details of presses whose Undo has passed leave the
+        # requests that carried them.
+        gmail_desk.scrub_old(self.settings)
+        return self._json(200, answer)
+
+    def _gmails_do(self, user: dict, field: dict) -> None:
+        """One press of the Gmails page on one Gmail or many: in the queue
+        or out of it, marked fixed, kept for a product, removed. One
+        request for the whole press, which the farm runs at once; each
+        Gmail is moved only if it still stands where the page drew it."""
+        refused = self._gmails_refusal(user)
+        if refused:
+            return self._json(200, {"ok": False, "note": refused})
+        what = str(field.get("what") or "")
+        verb = _GMAIL_PRESS.get(what) or (
+            "gmails_keep_for" if re.fullmatch(r"for:(gpt|spotify)?", what) else "")
+        if not verb:
+            return self._json(200, {"ok": False,
+                                    "note": "That is not a press this page knows."})
+        ids = sorted({int(x) for x in str(field.get("ids") or "").split(",")
+                      if x.strip().isdecimal()})
+        if not ids:
+            return self._json(200, {"ok": False, "note": "No Gmail was named."})
+        payload = {"ids": ids}
+        if verb == "gmails_keep_for":
+            payload["lane"] = what[4:]
+        return self._gmails_answer(self._gmail_press(user, verb, payload,
+                                                     what))
+
+    def _gmails_save(self, user: dict, field: dict) -> None:
+        """One Gmail's details from its form - and, asked to, marked fixed
+        in the same go. The page sends only what the person changed, each
+        with a `has_*` flag - an empty box arrives as no field at all, so
+        the flag tells an emptied one from one left alone (None)."""
+        refused = self._gmails_refusal(user)
+        if refused:
+            return self._json(200, {"ok": False, "note": refused})
+        row_id = str(field.get("id") or "")
+        if not row_id.isdecimal():
+            return self._json(200, {"ok": False, "note": "No Gmail was named."})
+        def given(name, flag):
+            return (str(field.get(name) or "") if field.get(flag) == "1"
+                    else None)
+
+        payload = {"id": int(row_id),
+                   "password": given("password", "has_password"),
+                   "key": given("key", "has_key"),
+                   "recovery": given("recovery", "has_rec"),
+                   "note": given("note", "has_note"),
+                   "fixed": field.get("fixed") == "1"}
+        return self._gmails_answer(self._gmail_press(user, "gmail_save",
+                                                     payload, row_id))
+
+    def _gmails_add(self, user: dict, field: dict) -> None:
+        """A paste from the Gmails page, as its reader understood each line:
+        new Gmails into a batch, and refused ones back fixed."""
+        refused = self._gmails_refusal(user)
+        if refused:
+            return self._json(200, {"ok": False, "note": refused})
+        try:
+            rows = json.loads(field.get("rows") or "[]")
+            back = json.loads(field.get("back") or "[]")
+        except ValueError:
+            return self._json(200, {"ok": False,
+                                    "note": "The page sent lines the farm cannot read."})
+        keep = ("address", "password", "key", "recovery")
+
+        def clean(items):
+            return [{k: str(r.get(k) or "") for k in keep}
+                    for r in items if isinstance(r, dict)]
+
+        rows = rows if isinstance(rows, list) else []
+        back = back if isinstance(back, list) else []
+        if len(rows) + len(back) > 2000:
+            return self._json(200, {"ok": False, "note": (
+                "Paste at most 2000 Gmails at a time - nothing was added.")})
+        rows, back = clean(rows), clean(back)
+        if not rows and not back:
+            return self._json(200, {"ok": False, "note": "Nothing to add."})
+        lane = str(field.get("lane") or "").strip().lower()
+        payload = {"rows": rows, "back": back,
+                   "seller": str(field.get("seller") or "")[:60],
+                   "lane": lane if lane in ("gpt", "spotify") else "",
+                   "carry": sorted({int(x) for x in str(field.get("carry") or "")
+                                    .split(",") if x.strip().isdecimal()})}
+        return self._gmails_answer(self._gmail_press(user, "gmails_add",
+                                                     payload, "batch"))
+
+    def _gmails_revert(self, user: dict, field: dict) -> None:
+        """The page's Undo: the presses named, taken back where nothing has
+        moved the Gmails since."""
+        refused = self._gmails_refusal(user)
+        if refused:
+            return self._json(200, {"ok": False, "note": refused})
+        reqs = sorted({int(x) for x in str(field.get("reqs") or "").split(",")
+                       if x.strip().isdecimal()})[:20]
+        if not reqs:
+            return self._json(200, {"ok": False, "note": "Nothing to take back."})
+        return self._gmails_answer(self._gmail_press(
+            user, "gmails_revert", {"reqs": reqs},
+            ",".join(str(r) for r in reqs)))
+
+    def _gmails_secret(self, user: dict, first: dict) -> None:
+        """One Gmail's password, key and recovery address, for an admin's
+        drawer - never in the page's state, never to an operator."""
+        from ..store import gmail_desk
+
+        # Asked by the page's script only (its header), never by a link
+        # opened or followed: the answer is a password.
+        if user.get("role") != "admin" or self._station_asked() != "page":
+            return self._json(403, {"ok": False, "said": "refused"})
+        row_id = str(first.get("id") or "")
+        got = (gmail_desk.secrets(self.settings, int(row_id))
+               if row_id.isdecimal() else None)
+        if got is None:
+            return self._json(200, {"ok": False,
+                                    "note": "That Gmail is no longer in the pool."})
+        log.info("%s read the details of %s", user.get("username"), got["address"])
+        return self._json(200, dict(got, ok=True))
+
+    def _gmail_press(self, user: dict, verb: str, payload: dict,
+                     target: str) -> dict:
+        """One request from the Gmails page: written down, and run here -
+        every one of its verbs is the store's alone (verbs.runs_inline) -
+        then answered with its outcome in the page's terms: never a value
+        from the request's detail that a person typed."""
+        from ..store import actions as store_actions
+
+        payload = dict(payload, by=user["username"], by_id=user["id"])
+        req = store_actions.enqueue(
+            self.settings, verb=verb, payload=payload,
+            requested_by=user["id"],
+            idem_key=f"{self._minute_key(user, verb, target or '-')}:"
+                     f"{_digest(payload)}")
+        if getattr(req, "fresh", True):
+            ran = self._ran_it_now(verb, payload, req)
+            if ran is None:
+                signals.ring(signals.queued)
+                return {"status": "queued", "req": int(req), "said": ""}
+        row = store_actions.one(self.settings, int(req)) or {}
+        return dict(_gmail_outcome(row), req=int(req))
 
     def _stock_post(self, user: dict, field: dict) -> None:
         """The stock planner's settings, from its page (an admin's). Saved
@@ -2671,6 +2888,14 @@ class _Handler(BaseHTTPRequestHandler):
             return self._proxies_do(user, field)
         if path == "/pools/proxy/add-batch":
             return self._proxies_add(user, field)
+        if path == "/pools/gmail/do":
+            return self._gmails_do(user, field)
+        if path == "/pools/gmail/save":
+            return self._gmails_save(user, field)
+        if path == "/pools/gmail/add-batch":
+            return self._gmails_add(user, field)
+        if path == "/pools/gmail/revert":
+            return self._gmails_revert(user, field)
         if path == "/pools/gmail/preview":
             from ..store import validate
 
@@ -4023,6 +4248,39 @@ def _proxy_verb(what: str, e: dict) -> tuple[str | None, dict]:
     if what == "remove":
         return "remove_proxy", {}
     return None, {}
+
+
+#: What a press of the Gmails page may ask, and the request each is.
+#: `for:<lane>` is `gmails_keep_for` (`_gmails_do`).
+_GMAIL_PRESS = {"aside": "gmails_aside", "free": "gmails_queue",
+                "mend": "gmails_mend", "remove": "gmails_remove"}
+
+
+def _gmail_outcome(row: dict) -> dict:
+    """A Gmails page request as the page may be told it: its status and
+    sentence, which Gmails moved and why the rest did not - never a value
+    from its detail that a person typed (a password rides in a save's)."""
+    detail = row.get("detail") if isinstance(row.get("detail"), dict) else {}
+
+    def ints(key):
+        return [int(i) for i in detail.get(key) or [] if str(i).isdecimal()]
+
+    left = detail.get("left") if isinstance(detail.get("left"), dict) else {}
+    return {"status": str(row.get("status") or ""),
+            "said": str(row.get("result") or ""),
+            "verb": str(row.get("verb") or ""),
+            "ids": ints("ids"),
+            "left": {str(k): str(v) for k, v in left.items()},
+            "mended": bool(detail.get("mended")),
+            "unfixable": bool(detail.get("unfixable")),
+            "added": ints("added"),
+            "returned": [int(r.get("id") or 0) for r in detail.get("returned") or []
+                         if isinstance(r, dict)],
+            "refused": [{"address": str(r.get("address") or ""),
+                         "why": str(r.get("why") or "")}
+                        for r in detail.get("left_out") or [] if isinstance(r, dict)],
+            "carried": ints("carried"),
+            "back": ints("back"), "moved": ints("moved")}
 
 
 _SWEEPS = frozenset({"test_all_proxies", "free_all_proxies",

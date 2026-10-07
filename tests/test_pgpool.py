@@ -1137,6 +1137,27 @@ def test_editing_a_recovery_row_does_not_copy_its_address_into_the_key():
     assert not row.credentials.has_authenticator
 
 
+def test_editing_a_row_with_both_factors_keeps_its_recovery_address():
+    """A row with a key and a recovery address shows its key in the cell,
+    and the editor writes it back with a seller's correction: the
+    recovery address nobody touched stays (the Gmails page keeps both,
+    2026-10-07)."""
+    table = MemoryTable()
+    table.add("gmail", address="both@x.com", password="pw", totp_secret=SECRET,
+              recovery_email="keeper@x.com", seller="egypt", sheet_row=2)
+    pool = PgGmailPool(table)
+    pool.load()
+    row = pool.find("both@x.com")
+    assert row.values["Secret"] == SECRET
+
+    pool.edit_cells(row, Secret=SECRET, Seller="somebody")
+
+    stored = stored_row(table)
+    assert (stored["totp_secret"], stored["recovery_email"]) == (SECRET, "keeper@x.com")
+    assert row.values["Recovery Email"] == "keeper@x.com"
+    assert row.credentials.has_authenticator
+
+
 def test_an_edit_can_turn_a_key_row_into_a_recovery_row_and_back():
     """Which the editor could not do at all: the update never cleared
     the column the other kind lives in.

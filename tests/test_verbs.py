@@ -2149,6 +2149,11 @@ def test_which_verbs_run_inline_is_written_down_and_not_only_derived():
         "set_phone_state", "clear_tries", "stop_phone", "build_by_hand",
         # The Station's give-back and call-off (2026-09-29).
         "give_back", "call_off_build",
+        # The Gmails page's presses: guarded store writes (2026-10-07).
+        "gmails_aside", "gmails_queue", "gmails_mend", "gmails_keep_for",
+        "gmails_remove", "gmail_save", "gmails_add", "gmails_revert",
+        # And the Requests page's Undo of a Remove, the row back as it was.
+        "restore_gmail",
     }, "a verb changed sides - say so on purpose or put it back"
 
 

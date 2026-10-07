@@ -1144,3 +1144,17 @@ CREATE INDEX IF NOT EXISTS stock_plans_at ON stock_plans (at);
 ALTER TABLE resources ADD COLUMN IF NOT EXISTS uses_per_day integer;
 ALTER TABLE resources ADD COLUMN IF NOT EXISTS day_uses integer NOT NULL DEFAULT 0;
 ALTER TABLE resources ADD COLUMN IF NOT EXISTS day_uses_on date;
+
+-- rev 45: the Gmails page (2026-10-07). A Gmail a person marks fixed goes
+-- back to the pool as fresh stock: its tries start again from nought and
+-- the page counts its sign-ins from `fixed_at`, with `fixed_by` saying who.
+-- And every sign-in says how far it got before Google answered - `stage`:
+-- a before the password, p after the password, c after the code or the
+-- recovery address; blank when nothing recorded it. Both nullable or
+-- defaulted, as every column added to these two tables must be.
+ALTER TABLE resources ADD COLUMN IF NOT EXISTS fixed_at timestamptz;
+ALTER TABLE resources ADD COLUMN IF NOT EXISTS fixed_by text NOT NULL DEFAULT '';
+ALTER TABLE signins   ADD COLUMN IF NOT EXISTS stage    text NOT NULL DEFAULT '';
+-- "Refused since its last fix" asks the sign-ins of one address after a
+-- moment, under the row locks of a press.
+CREATE INDEX IF NOT EXISTS signins_gmail ON signins (gmail, at);

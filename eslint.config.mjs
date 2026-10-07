@@ -101,4 +101,33 @@ export default [
       "no-redeclare": "error",
     },
   },
+  // The Gmails page's one script (2026-10-07), the same rules.
+  {
+    files: ["src/geelark_farm/web/static/gmails.js"],
+    languageOptions: {
+      ecmaVersion: 2022,
+      sourceType: "script",
+      globals: {
+        window: "readonly", document: "readonly", location: "writable",
+        navigator: "readonly", setTimeout: "readonly",
+        clearTimeout: "readonly", setInterval: "readonly", fetch: "readonly",
+        URLSearchParams: "readonly", Event: "readonly", MouseEvent: "readonly",
+        addEventListener: "readonly", innerHeight: "readonly",
+        innerWidth: "readonly", matchMedia: "readonly",
+        requestAnimationFrame: "readonly", performance: "readonly",
+        queueMicrotask: "readonly", CSS: "readonly",
+      },
+    },
+    rules: {
+      "no-unused-vars": ["error", {args: "none", caughtErrors: "none"}],
+      "no-undef": "error",
+      "no-unreachable": "error",
+      "no-dupe-keys": "error",
+      "no-dupe-args": "error",
+      "no-self-assign": "error",
+      "no-constant-condition": "error",
+      "no-fallthrough": "error",
+      "no-redeclare": "error",
+    },
+  },
 ];

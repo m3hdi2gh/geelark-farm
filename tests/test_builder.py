@@ -1494,8 +1494,8 @@ def test_addresses_and_serials_come_out_in_the_same_order(settings,
 
     real_claim = book.gmails.claim
 
-    def claim():
-        row = real_claim()
+    def claim(*a, **k):
+        row = real_claim(*a, **k)
         order.position = next(claimed)
         return row
 
@@ -5840,7 +5840,7 @@ class _Queue:
         self.out = []
         self.back = []
 
-    def claim(self, serial="", avoid_host=""):
+    def claim(self, serial="", avoid_host="", purpose=""):
         for row in self.rows:
             if row not in self.out and row not in self.back:
                 self.out.append(row)

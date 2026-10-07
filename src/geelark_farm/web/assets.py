@@ -45,6 +45,10 @@ STATION_JS = (_HERE / "station.js").read_text(encoding="utf-8")
 PROXIES_CSS = ((_HERE / "proxies.css").read_text(encoding="utf-8")
                + "\n" + RAIL_CSS)
 PROXIES_JS = (_HERE / "proxies.js").read_text(encoding="utf-8")
+#: The Gmails page's pair (2026-10-07), the same way.
+GMAILS_CSS = ((_HERE / "gmails.css").read_text(encoding="utf-8")
+              + "\n" + RAIL_CSS)
+GMAILS_JS = (_HERE / "gmails.js").read_text(encoding="utf-8")
 #: The full horizontal logo - the mark beside the IranSpoty wordmark, the
 #: wordmark on `currentColor`. The Station draws it in its header and the
 #: sign-in card above the form (2026-10-02): one file, so the two never
@@ -61,7 +65,8 @@ def _rev(*texts: str) -> str:
 #: What this build's files are. Short enough to read in a URL, long
 #: enough that two builds cannot collide. The Station's pair folds in, so
 #: a change to either page's files reloads both.
-REV = _rev(CSS, JS, STATION_CSS, STATION_JS, PROXIES_CSS, PROXIES_JS)
+REV = _rev(CSS, JS, STATION_CSS, STATION_JS, PROXIES_CSS, PROXIES_JS,
+           GMAILS_CSS, GMAILS_JS)
 
 #: The stylesheet is presentation and is served to anybody who can reach
 #: the host - the sign-in page needs it and has no session yet. The
@@ -74,16 +79,21 @@ STATION_CSS_PATH = f"/s/station-{REV}.css"
 STATION_JS_PATH = f"/s/station-{REV}.js"
 PROXIES_CSS_PATH = f"/s/proxies-{REV}.css"
 PROXIES_JS_PATH = f"/s/proxies-{REV}.js"
+GMAILS_CSS_PATH = f"/s/gmails-{REV}.css"
+GMAILS_JS_PATH = f"/s/gmails-{REV}.js"
 
 _KIND = {CSS_PATH: ("text/css; charset=utf-8", False),
          JS_PATH: ("text/javascript; charset=utf-8", True),
          STATION_CSS_PATH: ("text/css; charset=utf-8", False),
          STATION_JS_PATH: ("text/javascript; charset=utf-8", True),
          PROXIES_CSS_PATH: ("text/css; charset=utf-8", False),
-         PROXIES_JS_PATH: ("text/javascript; charset=utf-8", True)}
+         PROXIES_JS_PATH: ("text/javascript; charset=utf-8", True),
+         GMAILS_CSS_PATH: ("text/css; charset=utf-8", False),
+         GMAILS_JS_PATH: ("text/javascript; charset=utf-8", True)}
 _BODY = {CSS_PATH: CSS, JS_PATH: JS,
          STATION_CSS_PATH: STATION_CSS, STATION_JS_PATH: STATION_JS,
-         PROXIES_CSS_PATH: PROXIES_CSS, PROXIES_JS_PATH: PROXIES_JS}
+         PROXIES_CSS_PATH: PROXIES_CSS, PROXIES_JS_PATH: PROXIES_JS,
+         GMAILS_CSS_PATH: GMAILS_CSS, GMAILS_JS_PATH: GMAILS_JS}
 
 
 def served(path: str) -> tuple[str, str, bool] | None:

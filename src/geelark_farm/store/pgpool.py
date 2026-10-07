@@ -370,6 +370,8 @@ class _PgPool(Pool):
 
     # ------------------------------------------------------------- writing
     def _set(self, resource: Resource, fields: dict[str, str]) -> None:
+        # The row as it was, for the Gmail pool's one Secret cell (below).
+        before = dict(resource.values)
         payload = {}
         for name, value in fields.items():
             if name == self.note_column:
@@ -380,7 +382,10 @@ class _PgPool(Pool):
                 continue
             payload[column] = _to_db(column, value)
             resource.values[name] = "" if value is None else str(value)
-        payload = self._split_secret(fields, payload)
+        payload = self._split_secret(fields, payload, before)
+        recovery = getattr(self, "RECOVERY_COLUMN", "")
+        if recovery and "recovery_email" in payload:
+            resource.values[recovery] = payload["recovery_email"]
         # An exit's status change is stamped, so the rest rule counts
         # from it rather than from whatever last touched the row - a Test
         # writes the exit's address and would have restarted the clock
@@ -394,7 +399,8 @@ class _PgPool(Pool):
             self._table.update(resource.store_id, payload)
         self._note_held(resource, fields)
 
-    def _split_secret(self, fields: dict, payload: dict) -> dict:
+    def _split_secret(self, fields: dict, payload: dict,
+                      before: dict | None = None) -> dict:
         """Nothing here; the Gmail pool overrides it. See there."""
         return payload
 
@@ -443,9 +449,11 @@ class _PgPool(Pool):
         a row the claim would hold back. `purpose` counts what a build
         for that lane could take: its own rows and the unlabelled. An
         Other build (purposes.OTHER) may take any lane's, so it counts
-        every row, as a blank purpose does."""
+        every row, as a blank purpose does. Exits and Gmails carry a lane
+        (a Gmail kept for one product since 2026-10-07); the app pool's
+        rows do not."""
         held = (self._lane(purpose, either=True)
-                if purpose and purpose != "other" and isinstance(self, ProxyPool)
+                if purpose and purpose != "other" and self._laned()
                 else self.held_back())
         return self._table.free_count(
             self.kind, held_back=held, free=tuple(self.available_statuses),
@@ -485,8 +493,13 @@ class _PgPool(Pool):
         belongs to no lane: the unlabelled rows first, then whichever of
         the two lanes has more free rows, then the other one - so it
         takes from the lane that can spare it. `sorted` is stable, so GPT
-        wins a tie."""
-        if purpose == "other" and isinstance(self, ProxyPool):
+        wins a tie.
+
+        A Gmail kept for one product goes the same way (the Gmails page,
+        2026-10-07): a Spotify build takes the Gmails kept for Spotify
+        first, then the ones kept for neither, and never one kept for GPT.
+        Within each, the ladder's order holds - fresh before refused."""
+        if purpose == "other" and self._laned():
             counts = {name: self._table.free_count(
                           self.kind, held_back=self._lane(name),
                           free=tuple(self.available_statuses))
@@ -498,13 +511,17 @@ class _PgPool(Pool):
                 if row is not None:
                     return row
             return None
-        if purpose and isinstance(self, ProxyPool):
+        if purpose and self._laned():
             for lane in (purpose, ""):
                 row = self._claim(serial, avoid_host, self._lane(lane))
                 if row is not None:
                     return row
             return None
         return self._claim(serial, avoid_host, self.held_back())
+
+    def _laned(self) -> bool:
+        """Whether this pool's rows can be kept for one lane."""
+        return isinstance(self, (ProxyPool, GmailPool))
 
     def _lane(self, lane: str, either: bool = False) -> tuple[str, tuple]:
         """The pool's condition plus the lane's: rows kept for `lane`
@@ -632,9 +649,19 @@ class PgGmailPool(_PgPool, GmailPool):
 
     HOST_COLUMN = "last_host"
 
-    def _split_secret(self, fields: dict, payload: dict) -> dict:
+    def _split_secret(self, fields: dict, payload: dict,
+                      before: dict | None = None) -> dict:
         """One Secret cell in the sheet, two columns here - and `@` says
         which, the same decisive test `GmailPool._interpret` uses.
+
+        A row with both shows its key in the cell, and the editor writes
+        the cell back as it read it: a key keeps the row's recovery address
+        when the row had a key already - clearing it deleted an address
+        nobody had touched (the Gmails page, 2026-10-07, which keeps both).
+        Only an address row given a key loses its address. An address in
+        the cell always takes the key's place: the cell showed the key, so
+        an address typed there replaces it, and the key's column never
+        holds an address. An empty cell clears both.
 
         On both writes, not only the insert. The update mapped Secret
         straight onto `totp_secret` and never touched `recovery_email`,
@@ -653,8 +680,18 @@ class PgGmailPool(_PgPool, GmailPool):
         secret = (fields.get("Secret") or "").strip()
         payload = dict(payload)
         payload.pop("secret", None)
-        payload["recovery_email"] = secret if "@" in secret else ""
-        payload["totp_secret"] = "" if "@" in secret else secret
+        was = str((before or {}).get("Secret") or "").strip()
+        had_key = bool(was) and "@" not in was
+        if not secret:
+            payload["recovery_email"] = ""
+            payload["totp_secret"] = ""
+        elif "@" in secret:
+            payload["recovery_email"] = secret
+            payload["totp_secret"] = ""
+        else:
+            payload["totp_secret"] = secret
+            if not had_key:
+                payload["recovery_email"] = ""
         return payload
 
     def _held_from(self) -> int | None:

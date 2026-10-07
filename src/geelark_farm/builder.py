@@ -832,7 +832,9 @@ def _pair_up(client: Client, book: Book, settings: Settings,
     held: list = []
     try:
         for _ in range(GMAILS_PAST):
-            row = book.gmails.claim()
+            # Of the lane's own Gmails and those kept for neither, never a
+            # Gmail kept for the other product (the Gmails page, 2026-10-07).
+            row = book.gmails.claim(purpose=purpose)
             if row is None:
                 if held:
                     raise Aborted("no_other_exit")
@@ -884,7 +886,7 @@ def _record_signin(settings: Settings, build: Build, *, gmail: str,
                    ok: bool, seconds: float, captcha_rounds: int,
                    age_seconds: float | None = None, exit_ip: str = "",
                    touch: str = "", dumps: int = 0,
-                   proxy_name: str = "") -> None:
+                   proxy_name: str = "", stage: str = "") -> None:
     """One row in the store's `signins`, when there is a store."""
     if not getattr(settings, "store_enabled", False):
         return
@@ -901,9 +903,16 @@ def _record_signin(settings: Settings, build: Build, *, gmail: str,
                              exit_country=geo.country_for(settings, exit_ip)
                              if exit_ip else "",
                              touch=touch, dumps=dumps,
-                             proxy_name=proxy_name)
+                             proxy_name=proxy_name, stage=stage)
     except Exception as exc:                                      # noqa: BLE001
         log.debug("sign-in not recorded (%s)", exc)
+
+
+def _stage_of(outcome) -> str:
+    """How far the sign-in got before Google answered (store.signins)."""
+    from .store import signins as store_signins
+
+    return store_signins.stage_of(getattr(outcome, "trail", None) or ())
 
 
 #: Builds start within seconds of each other, four at a time, and every
@@ -1341,7 +1350,7 @@ def _acquire(st: _BuildState) -> Build | None:
         elif st.want and st.want.gmail:
             st.gmail_row = _pick(st.book.gmails, st.want.gmail, "Gmail")
         elif chosen_exit:
-            st.gmail_row = st.book.gmails.claim()
+            st.gmail_row = st.book.gmails.claim(purpose=st.purpose)
         else:
             # A Gmail off the queue carries the host it was refused
             # on, and a second try from the same host is the one thing
@@ -1485,7 +1494,8 @@ def _google_phase(st: _BuildState) -> Build | None:
             st.gmail_row = st.book.gmails.claim(
                 st.build.serial,
                 avoid_host=str(getattr(getattr(st.proxy_row, "proxy", None),
-                                       "host", "") or ""))
+                                       "host", "") or ""),
+                purpose=st.purpose)
             if st.gmail_row is None:
                 return st.finish("no_usable_gmail",
                               "the Gmails tab had no other address to try "
@@ -1555,7 +1565,8 @@ def _google_phase(st: _BuildState) -> Build | None:
             exit_ip=_exit_ip(st.proxy_row),
             touch=_touch_method(st.phone_id),
             dumps=int(getattr(outcome, "dumps", 0) or 0),
-            proxy_name=str(getattr(st.proxy_row, "name", "") or ""))
+            proxy_name=str(getattr(st.proxy_row, "name", "") or ""),
+            stage=_stage_of(outcome))
         heavy = (rounds >= HEAVY_CAPTCHA_ROUNDS
                  or outcome.reason == "captcha_shown")
         if heavy and st.proxy_row is not None:

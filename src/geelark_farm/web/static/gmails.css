@@ -1,0 +1,886 @@
+/* Layout: the Station's language on the pool the farm pays most for. The
+   bar carries the one thing done from the top - adding Gmails. Under it, a
+   line of numbers for the stock, two bars for the two answers a Gmail gets,
+   a card a batch, and the Gmails, a row each. Tokens, cards, the switch,
+   menus, the selection bar and the drawer are station.css's; everything
+   under "the Gmails" is this page's own. */
+:root{--bg:#0f1522;--line:#232c3f;--line2:#1d2636;--edge:#2c3a52;
+ --ink:#d7dee9;--bright:#f2f6fc;--muted:#8a97ab;--dim:#8391a8;
+ --green:#58d68d;--amber:#f0c064;--red:#e0654f;--blue:#7fb4ff;--violet:#c9b8f0;--cyan:#62d2e6;--rose:#ef6f9f;
+ --gpt:#e6eaf0;--gpt-line:#4a515e;--spot:#5fe3a1;--spot-line:#1f7a55;--other:#9ec7ff;--other-line:#2a5a8f;
+ --quiet:#9db4d4;--hover:#1c2639;--bad-ink:#f0a094;--card-top:#172134;--card-bot:#121a29;
+ --tile:linear-gradient(180deg,#1c1c1c,#070707);
+ --sans:'IBM Plex Sans',system-ui,-apple-system,'Segoe UI',sans-serif;
+ --mono:'IBM Plex Mono',ui-monospace,'SFMono-Regular',Menlo,monospace;
+ --ease:cubic-bezier(.2,.8,.2,1);color-scheme:dark}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html{background:var(--bg);scrollbar-gutter:stable}
+/* While the drawer is open the page behind it holds still. */
+html.locked{overflow:hidden}
+body{margin:0;min-height:100%;color:var(--ink);font:14px/1.5 var(--sans);-webkit-font-smoothing:antialiased;
+ background:radial-gradient(820px 400px at 16% -220px,rgba(0,231,255,.055),transparent 70%),
+  radial-gradient(820px 400px at 84% -220px,rgba(138,108,245,.065),transparent 70%),var(--bg)}
+button{cursor:pointer;font:inherit;color:inherit;background:none;border:0;padding:0;white-space:nowrap}
+button:focus-visible,[role="button"]:focus-visible,input:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
+.tab{font-variant-numeric:tabular-nums}
+@keyframes rise{from{opacity:0;transform:translateY(10px)}}
+/* The selection bar rises where it stands: centred by its transform, so the
+   rise must keep the centring or the bar enters half its width to the right. */
+@keyframes selrise{from{opacity:0;transform:translate(-50%,10px)}}
+@keyframes fade{from{opacity:0}}
+@keyframes slide{from{transform:translateX(24px);opacity:0}}
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;animation-delay:0s!important;transition-duration:.01ms!important}}
+
+/* ---------------------------------------------------------------- bar */
+/* The Station's order: the brand on the left; the page's one action on the
+   right, beside who is signed in, where the Station keeps Build - so nothing
+   floats in the middle with space around it. */
+.bar{position:sticky;top:env(safe-area-inset-top,0px);z-index:20;display:grid;
+ grid-template-columns:auto minmax(0,1fr) auto auto;grid-template-areas:"brand . add who";
+ align-items:center;gap:12px 20px;padding:14px clamp(16px,3vw,32px);
+ background:linear-gradient(180deg,rgba(18,25,40,.95),rgba(15,21,34,.9));-webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px)}
+.bar:has(.cmp:not([hidden])){z-index:45}
+.bar::after{content:"";position:absolute;left:0;right:0;bottom:0;height:1px;
+ background:linear-gradient(90deg,transparent 0%,rgba(0,231,255,.28) 22%,rgba(138,108,245,.32) 60%,transparent 100%)}
+/* The IranSpoty logo as the Station draws it (station_brand.svg), and under
+   its wordmark - starting where the wordmark starts - CLOUD FARM · GMAILS.
+   --lh is the logo's height; the wordmark begins 1.179 heights in (56.8 of
+   the logo's 48.17 units). */
+.brand{grid-area:brand;justify-self:start;--lh:38px;display:flex;flex-direction:column;align-items:flex-start;gap:6px}
+.brand .logo-full{display:block;height:var(--lh);width:auto;color:var(--bright);filter:drop-shadow(0 6px 16px rgba(0,231,255,.12))}
+.bn{margin-left:calc(var(--lh) * 1.179);font-size:9px;font-weight:500;line-height:1;color:#6fd3e8;letter-spacing:1.05px;
+ text-transform:uppercase;white-space:nowrap}
+.bn i{font-style:normal;color:var(--dim)}
+/* Add Gmails: one button cut like the Station's Take and Build tiles - a
+   dark icon tile, the word, a quiet line under it - in the page's violet.
+   Pressed, or pasted into while it has focus, it opens a card under itself:
+   the paste, how each line was read, and who sold them. A draft survives
+   closing, and the button says so in amber. */
+.addbox{grid-area:add}
+.cmpc{--c:#c4b5fd;--cb:#1d1840;--ch:#2a2257;--ce:#4a3d8f;height:52px;display:flex;align-items:center;gap:11px;padding:0 18px 0 8px;
+ border-radius:14px;text-align:left;color:var(--bright);background:linear-gradient(180deg,var(--ch),var(--cb));border:1px solid var(--ce);
+ box-shadow:inset 0 1px 0 rgba(255,255,255,.07),0 12px 30px -20px var(--c);transition:border-color .2s,box-shadow .25s,transform .12s}
+.cmpc:hover,.cmpc[aria-expanded="true"]{border-color:var(--c);box-shadow:inset 0 1px 0 rgba(255,255,255,.1),0 16px 36px -16px var(--c)}
+.cmpc:hover{transform:translateY(-1px)}
+.cmpc:active{transform:translateY(0)}
+.cmpc .ic{position:relative;width:36px;height:36px;border-radius:11px;display:grid;place-items:center;flex:none;background:rgba(6,10,18,.38);color:var(--c)}
+.cmpc .ic svg{width:21px;height:21px;display:block}
+.cmpc .t{display:flex;flex-direction:column;gap:5px;min-width:0}
+.cmpc .t b{font-size:14px;font-weight:600;line-height:1}
+.cmpc .t small{font:11px/1 var(--mono);color:var(--c);opacity:.85;white-space:nowrap}
+.cmpc.draft .t small{color:var(--amber);opacity:1}
+.cmpc.draft .ic::after{content:"";position:absolute;top:-3px;right:-3px;width:9px;height:9px;border-radius:50%;background:var(--amber);box-shadow:0 0 0 2px var(--ch)}
+.plus{width:38px;height:38px;border-radius:11px;display:grid;place-items:center;flex:none;color:#fff;
+ background:linear-gradient(135deg,#5b47c9,#8a6cf5);box-shadow:inset 0 1px 0 rgba(255,255,255,.18),0 8px 18px -10px rgba(124,92,230,.9)}
+.plus svg{width:20px;height:20px}
+.cmp .hd .t{display:flex;flex-direction:column;gap:6px;min-width:0;flex:1}
+.cmp .hd .t b{font-size:14.5px;font-weight:600;line-height:1;color:var(--bright)}
+.cmp .hd .t small{font:11.5px/1 var(--mono);color:#b9acf2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* The card hangs from the bar's right edge, under the button and the name,
+   so it never runs off the page however narrow the window. */
+.cmp{position:absolute;top:calc(100% + 8px);right:clamp(16px,3vw,32px);width:min(620px,calc(100% - 2 * clamp(16px,3vw,32px)));max-height:calc(100dvh - 110px);overflow-y:auto;overscroll-behavior:contain;z-index:5;display:flex;flex-direction:column;gap:12px;padding-bottom:14px;border-radius:16px;
+ border:1px solid rgba(138,108,245,.55);
+ background:radial-gradient(560px 220px at 100% 0%,rgba(138,108,245,.15),transparent 70%),linear-gradient(180deg,#1a2238,#121a29);
+ box-shadow:inset 0 1px 0 rgba(255,255,255,.05),0 46px 90px -30px rgba(0,0,0,.95);animation:drop .2s var(--ease)}
+@keyframes drop{from{opacity:0;transform:translateY(-6px)}}
+.cmp .hd{display:flex;align-items:center;gap:12px;height:52px;padding:0 8px}
+.cmp>textarea,.cmp>.read,.cmp>.opts,.cmp>footer{margin:0 14px}
+.cmp textarea{min-height:104px;max-height:220px;resize:vertical;padding:10px 12px;border-radius:11px;border:1px solid var(--line);
+ background:rgba(8,12,20,.5);color:var(--bright);font:12.5px/1.6 var(--mono)}
+.cmp textarea::placeholder{color:var(--dim)}
+.cmp textarea:focus,.cmp input:focus{border-color:#6a58c4;outline:0}
+.read{display:flex;flex-direction:column;gap:7px}
+.read .rh{display:flex;gap:12px;font-size:12px;color:var(--dim)}
+.read .rh b{font-weight:600}.read .rh .ok{color:var(--green)}.read .rh .bad{color:var(--rose)}
+.read ul{list-style:none;margin:0;padding:0;border:1px solid var(--line2);border-radius:10px;background:rgba(8,12,20,.3)}
+.read li{display:grid;grid-template-columns:14px minmax(0,1fr) auto auto;align-items:center;gap:10px;min-height:30px;padding:5px 10px;font:12px/1.2 var(--mono);color:var(--ink)}
+.read li+li{border-top:1px solid var(--line2)}
+.read li svg{width:12px;height:12px}
+.read li.ok svg{color:var(--green)}.read li.bad svg{color:var(--rose)}
+.read li .hp{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.read li .u{color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:150px}
+.read li .to{color:#c6b8ff;font-weight:500}
+.read li.bad .hp{color:var(--bad-ink)}
+.read li.bad .u{grid-column:3/5;max-width:none;font-family:var(--sans)}
+.read li.more{display:block;color:var(--dim);font-family:var(--sans)}
+/* Who sold the batch, and the day it is filed under. */
+.opts{display:flex;flex-direction:column;gap:12px}
+.orow{display:flex;flex-wrap:wrap;align-items:flex-end;gap:12px 16px}
+.opt{display:flex;flex-direction:column;gap:7px;min-width:0}
+.opt.grow{flex:1 1 150px}
+.opt>.k{font:10px/1 var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--dim)}
+.opt>.k i{font-style:normal;text-transform:none;letter-spacing:0;color:var(--muted)}
+.opt input{height:34px;width:100%;padding:0 11px;border-radius:9px;border:1px solid var(--line);background:rgba(8,12,20,.5);color:var(--bright);font:13px var(--sans)}
+.opt input::placeholder{color:var(--dim)}
+.opt input.need{border-color:#57431c;box-shadow:0 0 0 3px rgba(240,192,100,.08)}
+.date{display:inline-flex;align-items:center;height:34px;padding:0 12px;border-radius:9px;border:1px dashed var(--edge);
+ color:var(--ink);font:500 12.5px/1 var(--mono);white-space:nowrap}
+.step{display:inline-flex;align-items:center;gap:2px;height:34px;padding:3px;border-radius:10px;background:rgba(8,12,20,.55);border:1px solid var(--line2)}
+.step button{width:28px;height:26px;border-radius:7px;color:var(--quiet);font:500 16px/1 var(--sans);display:grid;place-items:center}
+.step button:hover{background:var(--hover);color:var(--bright)}
+.opt .step input{width:34px;height:26px;padding:0;border:0;border-radius:6px;background:none;text-align:center;color:var(--bright);font:500 13px/1 var(--mono)}
+.opt .step input:focus{background:var(--hover)}
+.step small{padding:0 9px 0 3px;font-size:12px;color:var(--dim);white-space:nowrap}
+.read .rh .to{margin-left:auto;color:#c6b8ff;font:500 11.5px/1 var(--mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.read .rh .need{margin-left:auto;color:var(--amber)}
+.cmp footer{display:flex;flex-wrap:wrap;align-items:center;gap:8px 10px;padding-top:12px;border-top:1px solid var(--line2)}
+.cmp footer small{flex:1 1 230px;font-size:12px;line-height:1.45;color:var(--dim)}
+.cmp footer .go{height:38px;padding:0 18px;border-radius:999px;background:linear-gradient(135deg,#5040b8,#7558e0);color:#fff;font-size:13.5px;font-weight:600;
+ display:inline-flex;align-items:center;gap:8px;box-shadow:inset 0 1px 0 rgba(255,255,255,.16),0 14px 28px -18px rgba(124,92,230,.9)}
+.cmp footer .go:hover{background:linear-gradient(135deg,#5a48c8,#7a5ee6)}
+.cmp footer .go:disabled{opacity:.42;cursor:not-allowed;background:linear-gradient(135deg,#5040b8,#7558e0)}
+.cmp footer .go svg{width:15px;height:15px}
+.cmp footer .ghost{height:38px;padding:0 15px;border-radius:999px;border:1px solid var(--edge);color:var(--quiet);font-size:13px}
+.cmp footer .ghost:hover{background:var(--hover);color:var(--bright)}
+.who{grid-area:who;justify-self:end;display:flex;align-items:center;gap:11px;padding-left:20px;border-left:1px solid var(--line)}
+.who .av{position:relative;width:36px;height:36px;border-radius:50%;display:grid;place-items:center;font-size:13px;font-weight:600;
+ color:var(--bright);background:linear-gradient(140deg,#2d3c5e,#1b273f)}
+.who .av::before{content:"";position:absolute;inset:-3px;border-radius:50%;padding:1.5px;
+ background:linear-gradient(180deg,#00e7ff,#3c85c0 45%,#693c91);
+ -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude;opacity:.85}
+.who .nm{display:flex;flex-direction:column;gap:3px}
+.who .nm b{font-size:14px;font-weight:600;color:var(--bright);line-height:1.1}
+.who .nm small{font-size:11px;color:var(--dim);line-height:1}
+
+#s-gm{scroll-margin-top:96px}
+main{max-width:1560px;margin:0 auto;padding:20px clamp(16px,3vw,32px) 120px;display:flex;flex-direction:column;gap:22px}
+.seg{display:inline-flex;padding:3px;border-radius:10px;background:rgba(8,12,20,.55);border:1px solid var(--line2)}
+.seg button{height:28px;min-width:36px;padding:0 12px;border-radius:7px;font:500 12px/1 var(--sans);color:var(--dim);transition:background .15s,color .15s}
+.seg button:hover{color:var(--bright)}
+.seg button[aria-checked="true"]{background:#24324c;color:var(--bright);box-shadow:inset 0 0 0 1px #3a4d6e}
+.seg button i{font:500 11px/1 var(--mono);font-style:normal;color:var(--dim);margin-left:3px}
+.seg button[aria-checked="true"] i{color:var(--blue)}
+.card{border:1px solid var(--line);border-radius:14px;background:linear-gradient(180deg,var(--card-top),var(--card-bot));
+ box-shadow:inset 0 1px 0 rgba(255,255,255,.035),0 26px 50px -38px rgba(0,0,0,.85)}
+.act{height:30px;padding:0 12px;border-radius:8px;border:1px solid var(--edge);background:rgba(8,12,20,.4);
+ color:var(--quiet);font-size:12px;font-weight:500;display:inline-flex;align-items:center;gap:6px;transition:background .15s,border-color .15s,color .15s}
+.act:hover{background:var(--hover);border-color:#4a5e80;color:var(--bright)}
+.act.bad:hover{background:#2a1512;border-color:#57241c;color:var(--bad-ink)}
+.xs{width:28px;height:28px;border-radius:8px;display:grid;place-items:center;color:var(--dim);flex:none;transition:background .15s,color .15s}
+.xs:hover{background:var(--hover);color:var(--bright)}
+.xs svg{width:13px;height:13px}
+
+
+.sw{position:relative;width:34px;height:20px;flex:none;border-radius:999px;background:var(--line);box-shadow:inset 0 0 0 1px var(--edge);transition:background .2s,box-shadow .2s}
+.sw i{position:absolute;top:3px;left:3px;width:14px;height:14px;border-radius:50%;background:var(--muted);box-shadow:0 1px 3px rgba(0,0,0,.5);transition:transform .22s var(--ease),background .2s}
+.sw[aria-checked="true"]{background:color-mix(in srgb,var(--green) 26%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--green) 55%,transparent)}
+.sw[aria-checked="true"] i{transform:translateX(14px);background:var(--green)}
+.sw:hover:not(:disabled){filter:brightness(1.18)}
+/* The same switch on every Gmail that can be in or out of the queue: in
+   the list beside its state, in its drawer under its name, and for the
+   ticked ones in the selection bar. Some on and some off, the knob stands
+   in the middle. */
+.sw:disabled{cursor:default}
+.sw.wait{background:color-mix(in srgb,var(--amber) 12%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--amber) 55%,transparent)}
+.sw.wait i{background:var(--amber)}
+.sw[aria-checked="mixed"]{background:color-mix(in srgb,var(--green) 12%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--green) 40%,transparent)}
+.sw[aria-checked="mixed"] i{transform:translateX(7px);background:var(--quiet)}
+.stc{display:inline-flex;align-items:center;gap:10px}
+.stc>span{display:flex;flex-direction:column;align-items:flex-start}
+.sws{display:inline-flex;align-items:center;gap:9px;margin-right:6px;padding-right:13px;border-right:1px solid var(--line)}
+.sws>span{display:flex;flex-direction:column;gap:4px;font-size:12px;font-weight:500;line-height:1;color:var(--ink);white-space:nowrap}
+.sws small{font:10.5px/1 var(--mono);color:var(--dim)}
+.draw header .row .sw{margin-right:2px}
+
+#sortbox{flex:none}
+.chip{max-width:100%;min-width:0;height:28px;padding:0 10px 0 12px;border-radius:999px;border:1px solid #3f5a86;background:rgba(127,180,255,.14);
+ color:var(--bright);font-size:12px;font-weight:500;display:inline-flex;align-items:center;gap:7px}
+.chip svg{width:11px;height:11px;flex:none;color:var(--blue)}
+.chip>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.search{position:relative;flex:1 1 180px;min-width:0;max-width:250px;margin-left:auto}
+.search svg{position:absolute;left:11px;top:50%;transform:translateY(-50%);width:14px;height:14px;color:var(--dim);pointer-events:none}
+.search input{width:100%;height:34px;padding:0 12px 0 32px;border-radius:9px;border:1px solid var(--line);
+ background:rgba(8,12,20,.45);color:var(--bright);font:13px/1 var(--sans)}
+.search input::placeholder{color:var(--dim)}
+.search input:focus{border-color:var(--edge);outline:0}
+.search input:focus-visible{outline:2px solid var(--blue);outline-offset:1px}
+.count{font-size:12px;color:var(--dim)}
+.count b{color:var(--ink);font-weight:500}
+.wrap{overflow-x:auto}
+.card>.wrap:first-child{border-radius:13px}
+#notice:empty{display:none}
+table{width:100%;min-width:1180px;border-collapse:collapse}
+thead th{text-align:left;padding:10px 11px;font-size:10px;font-weight:600;letter-spacing:.09em;text-transform:uppercase;
+ color:var(--dim);background:rgba(20,29,46,.6);border-bottom:1px solid var(--line);white-space:nowrap}
+.card>.wrap:first-child>table>thead th:first-child{border-top-left-radius:13px}.card>.wrap:first-child>table>thead th:last-child{border-top-right-radius:13px}
+thead th.sortable{cursor:pointer;-webkit-user-select:none;user-select:none}
+thead th.sortable:hover{color:var(--ink)}
+thead th .ar{display:inline-block;margin-left:5px;opacity:0;transition:opacity .15s}
+thead th.up .ar,thead th.down .ar{opacity:1;color:var(--blue)}
+thead th.down .ar{transform:rotate(180deg)}
+thead th .lg{display:grid;grid-template-columns:var(--rg);margin-top:7px;text-transform:none;letter-spacing:0;font:500 10px/1 var(--mono)}
+thead th .lg .p{color:var(--ink)}
+thead th .lg .d{color:var(--green)}thead th .lg .x{color:var(--amber)}thead th .lg .o{color:var(--red)}thead th .lg .a{color:var(--cyan)}thead th .lg .f{color:var(--rose)}
+tbody tr{border-bottom:1px solid var(--line2);transition:background .13s}
+tbody tr:last-child{border-bottom:0}
+tbody tr:hover{background:rgba(27,37,57,.6)}
+tbody tr.ticked{background:rgba(22,38,62,.55)}
+tbody tr.off td:first-child{box-shadow:inset 3px 0 0 var(--amber)}
+td{padding:9px 11px;vertical-align:middle}
+td.tk{width:36px;padding-right:0}
+.box{position:relative;width:17px;height:17px;border-radius:5px;border:1.5px solid #5d6b84;display:grid;place-items:center;color:transparent;
+ background:rgba(8,12,20,.4);transition:background .15s,border-color .15s,color .15s}
+.box svg{width:11px;height:11px}
+tr:hover .box:not(.on){border-color:#7b8aa3}
+.box.on{background:var(--blue);border-color:var(--blue);color:#0b1019}
+.box::before{content:"";position:absolute;inset:-10px}
+.box svg,.box::after{grid-area:1/1}
+.box[aria-checked="mixed"]{border-color:var(--blue)}
+.box[aria-checked="mixed"]::after{content:"";width:8px;height:2px;border-radius:1px;background:var(--blue)}
+.draw header .id>b i{font-style:normal;color:#c6b8ff}
+/* The one door on a row: More - everything the row can be told to do,
+   without leaving the list. Its switch sits with its state. */
+.doors{display:flex;gap:4px;justify-content:flex-end}
+.doors button{height:28px;padding:0 9px;border-radius:7px;border:1px solid var(--edge);background:rgba(8,12,20,.35);color:var(--quiet);
+ display:inline-flex;align-items:center;gap:5px;font:500 11.5px/1 var(--sans);transition:background .15s,border-color .15s,color .15s}
+.doors button:hover{background:var(--hover);border-color:#3d4f6e;color:var(--bright)}
+.doors button.on{color:var(--bright);border-color:#3f5a86;background:rgba(127,180,255,.1)}
+.doors button svg{width:12px;height:12px;flex:none}
+.doors button.more{padding:0 6px}
+.none-row td{padding:38px 14px;text-align:center;color:var(--dim);font-size:13px}
+.none-row b{display:block;margin-bottom:8px;font-size:14px;font-weight:500;color:var(--ink)}
+.foot{display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:12px 2px 0;font-size:12px;color:var(--dim)}
+.foot b{color:var(--ink);font-weight:500}
+.foot .arch{margin-left:auto}
+.link{color:var(--blue);border-bottom:1px solid rgba(127,180,255,.3);line-height:1.2}
+.link:hover{border-bottom-color:var(--blue)}
+/* A menu floats over the list - or the drawer - from the button that opened it. */
+.pop{position:fixed;z-index:60;min-width:160px;padding:6px;border-radius:12px;background:#18233a;border:1px solid var(--edge);
+ box-shadow:0 20px 44px -16px rgba(0,0,0,.9);display:flex;flex-direction:column;animation:rise .18s var(--ease)}
+.pop button{height:32px;padding:0 10px;border-radius:8px;text-align:left;font-size:12.5px;color:var(--quiet);display:flex;align-items:center;gap:9px}
+.pop button:hover{background:var(--hover);color:var(--bright)}
+.pop button.on{color:var(--bright);background:rgba(127,180,255,.1)}
+.pop button.bad:hover{background:#2a1512;color:var(--bad-ink)}
+.pop button svg{width:13px;height:13px}
+.pop .step button{width:28px;height:26px;padding:0;justify-content:center;font-size:16px}
+.pop .step input{width:34px;height:26px;padding:0;border:0;border-radius:6px;background:none;text-align:center;color:var(--bright);font:500 13px/1 var(--mono)}
+.pop .step input:focus{outline:0;background:var(--hover)}
+
+/* ------------------------------------------------------------- the rest */
+.sel{position:fixed;left:50%;bottom:calc(22px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);z-index:40;
+ display:flex;align-items:center;flex-wrap:wrap;gap:6px;width:max-content;max-width:calc(100% - 24px);padding:8px 8px 8px 16px;border-radius:16px;
+ background:rgba(20,28,44,.96);border:1px solid #3f5a86;-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);
+ box-shadow:0 24px 50px -18px rgba(0,0,0,.9);animation:selrise .25s var(--ease)}
+.sel>b{font-size:13px;font-weight:600;color:var(--bright);margin-right:8px;white-space:nowrap}
+.sel>b small{margin-left:6px;font-size:11.5px;font-weight:500;color:var(--amber)}
+.scrim{position:fixed;inset:0;z-index:50;background:rgba(5,8,14,.62);-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);animation:fade .2s ease}
+.draw{position:fixed;top:0;right:0;bottom:0;z-index:51;width:min(450px,100%);display:flex;flex-direction:column;
+ border-left:1px solid var(--line);background:linear-gradient(180deg,#162032,#101827);box-shadow:-30px 0 70px -20px rgba(0,0,0,.9);animation:slide .3s var(--ease)}
+.draw header{display:flex;align-items:flex-start;gap:12px;padding:18px 18px 14px;border-bottom:1px solid var(--line2)}
+.draw header .id{display:flex;flex-direction:column;gap:9px;min-width:0}
+.draw header .id>b{font:500 20px/1.1 var(--mono);color:var(--bright)}
+.draw header .id .row{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.xbtn{margin:-4px -4px 0 auto;width:32px;height:32px;border-radius:50%;display:grid;place-items:center;color:var(--dim);flex:none;transition:background .15s,color .15s}
+.xbtn:hover{background:var(--hover);color:var(--bright)}
+.xbtn svg{width:14px;height:14px}
+.draw .body{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:2px 18px 18px}
+.draw h3{margin:20px 0 10px;font-size:10px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--dim)}
+.lines{display:flex;flex-direction:column;margin:0 -8px}
+.l1{display:grid;grid-template-columns:96px minmax(0,1fr) auto;align-items:center;gap:10px;min-height:38px;padding:6px 8px;border-radius:9px;position:relative;transition:background .15s}
+.l1+.l1::before{content:"";position:absolute;left:8px;right:8px;top:0;height:1px;background:var(--line2)}
+.l1.copy{cursor:pointer}
+.l1.copy:hover{background:rgba(27,37,57,.75)}
+.l1 .k{font:10px/1 var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--dim)}
+.l1 .v{font:500 12.5px/1.3 var(--mono);color:var(--bright);overflow-wrap:anywhere}
+.l1 .cp{width:26px;height:26px;border-radius:7px;display:grid;place-items:center;color:var(--dim);opacity:.4;transition:opacity .15s,color .15s}
+.l1.copy:hover .cp{opacity:1;color:var(--bright)}
+.l1.just .cp{opacity:1;color:var(--green)}
+.l1 .cp svg{width:13px;height:13px}
+.draw header .id .why{max-width:360px;font-size:12px;line-height:1.45;color:var(--dim);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.draw h3 small{margin-left:8px;text-transform:none;letter-spacing:0;font:400 11.5px/1 var(--sans);color:var(--dim)}
+.kvs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.kv{display:flex;flex-direction:column;gap:6px;padding:12px 12px 11px;border-radius:11px;background:rgba(8,12,20,.35);border:1px solid var(--line2)}
+.kv b{font:500 22px/1 var(--mono);letter-spacing:-.5px}
+.kv span{font-size:10px;font-weight:600;letter-spacing:.09em;text-transform:uppercase;color:var(--dim)}
+.kv small{font:11px/1 var(--mono);color:var(--dim)}
+.kv.d b{color:var(--green)}.kv.x b{color:var(--amber)}.kv.o b{color:var(--red)}.kv.na b{color:var(--dim)}
+.rmore{margin-top:8px;font-size:12px;color:var(--dim)}
+.draw footer{display:flex;flex-wrap:wrap;gap:7px;padding:13px 18px;border-top:1px solid var(--line2);background:rgba(10,15,25,.5)}
+.draw footer .doors{justify-content:flex-start;gap:6px}
+.draw footer .doors button{height:34px;padding:0 12px;font-size:12.5px}
+.said{--tc:var(--blue);position:fixed;left:50%;bottom:calc(24px + env(safe-area-inset-bottom,0px));z-index:70;display:flex;align-items:center;gap:11px;
+ width:max-content;max-width:min(620px,calc(100% - 32px));padding:11px 16px 11px 14px;border-radius:14px;background:rgba(20,28,44,.94);border:1px solid var(--edge);
+ color:var(--ink);font-size:13px;line-height:1.4;-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);box-shadow:0 20px 44px -18px rgba(0,0,0,.85);
+ opacity:0;transform:translate(-50%,8px);transition:opacity .3s,transform .35s var(--ease);pointer-events:none}
+.said::before{content:"";width:7px;height:7px;border-radius:50%;flex:none;background:var(--tc);box-shadow:0 0 0 3px color-mix(in srgb,var(--tc) 20%,transparent)}
+.said.up{opacity:1;transform:translate(-50%,0)}
+.said.ok{--tc:var(--green)}
+/* The note's own clock: a thin line that runs out as it is about to go. */
+.said::after{content:"";position:absolute;left:14px;right:14px;bottom:4px;height:2px;border-radius:1px;
+ background:color-mix(in srgb,var(--tc) 45%,transparent);transform-origin:left;transform:scaleX(0)}
+.said.up::after{animation:runout 3.6s linear both}
+@keyframes runout{from{transform:scaleX(1)}to{transform:scaleX(0)}}
+
+/* Every input shows the keyboard where it is. */
+.cmp textarea:focus-visible,.cmp input:focus-visible,.step input:focus-visible,.pop .step input:focus-visible{outline:2px solid var(--blue);outline-offset:1px}
+/* Words for screen readers only. */
+.sr{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap;border:0}
+
+/* ---------------------------------------------------------------- motion */
+/* One orchestrated moment when the page opens - the sections rise in turn,
+   the batch cards one after another, the rings draw themselves - and after
+   that motion only answers a press: a switch gives under the finger and
+   glows once on, a changed row or card glows once, a ring that changed
+   draws again. Nothing replays on a redraw that changed nothing. */
+@keyframes grow{from{transform:scaleY(0)}}
+@keyframes draw{from{stroke-dasharray:0 100}}
+@keyframes glow{from{background:rgba(127,180,255,.17)}to{background:transparent}}
+@keyframes cardglow{from{box-shadow:0 0 0 2px rgba(127,180,255,.42),0 20px 40px -32px rgba(0,0,0,.85)}}
+@keyframes lit{from{box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--green) 55%,transparent),0 0 0 0 color-mix(in srgb,var(--green) 50%,transparent)}
+ to{box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--green) 55%,transparent),0 0 0 7px transparent}}
+.boot>section{animation:rise .5s var(--ease) both}
+.boot>section:nth-of-type(2){animation-delay:.08s}
+.boot>section:nth-of-type(3){animation-delay:.16s}
+tr.flash td{animation:glow 1.6s ease-out}
+.sw:active:not(:disabled) i{width:18px}
+.sw[aria-checked="true"]:active:not(:disabled) i{transform:translateX(10px)}
+.sw.lit{animation:lit .7s ease-out}
+.doors button,.act,.flag,.seg button,.sortb,.pop button,.chip,.cmp footer .go,.cmp footer .ghost{transition-property:background,border-color,color,transform;transition-duration:.15s}
+.doors button:active,.act:active,.flag:active:not(:disabled),.seg button:active,.sortb:active,.pop button:active,.chip:active,.cmp footer .go:active:not(:disabled){transform:scale(.97)}
+.cmpc .ic svg{transition:transform .4s var(--ease)}
+.cmpc:hover .ic svg{transform:rotate(-14deg)}
+.note{display:flex;align-items:center;gap:12px;min-height:46px;padding:8px 8px 8px 12px;border-radius:12px;border:1px solid #57431c;
+ background:linear-gradient(90deg,rgba(240,192,100,.09),rgba(240,192,100,.03))}
+.note .tx{flex:1;min-width:0;font-size:13px;line-height:1.4;color:var(--ink)}
+.note .tx b{font-weight:600;color:var(--bright)}
+
+@media (max-width:760px){
+ /* One row still: the button keeps only its tile, like the Station's Build
+    on a phone. */
+ .bar{grid-template-columns:minmax(0,1fr) auto auto;grid-template-areas:"brand add who";gap:12px;padding:12px 16px;position:relative}
+ .bn{display:none}
+ .cmpc{height:44px;padding:0 4px;gap:0}
+ .cmpc .t{display:none}
+ .cmpc .ic{width:34px;height:34px;border-radius:10px}
+ .cmp footer small{flex-basis:100%}
+ .cmp footer .go{flex:1 1 auto;justify-content:center}
+ .who{padding-left:0;border-left:0}
+ .who .nm{display:none}
+ .search{max-width:none;margin-left:0;flex-basis:100%}
+ #s-gm{scroll-margin-top:16px}
+ /* A control wider than the phone scrolls inside itself, never the page. */
+ .tools>span[id$="seg"]{min-width:0;max-width:100%}
+ /* Show only stays one line on a phone and scrolls inside itself. */
+ .fl{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;padding-bottom:2px}
+ .fl::-webkit-scrollbar{display:none}
+ .fl>*{flex:none}
+ /* On a phone the search comes first, and Sort takes its own line under
+    the Show only row. */
+ .tools .search{order:-1}
+ .frow{flex-wrap:wrap}
+ .frow>.fl{flex-basis:100%}
+ span.seg{max-width:100%;overflow-x:auto;scrollbar-width:none}
+ span.seg::-webkit-scrollbar{display:none}
+ span.seg>button{flex:none}
+}
+@media (max-width:420px){.brand{--lh:32px}}
+/* ------------------------------------------------------------ the Gmails */
+/* One idea, carried through: a Gmail gets two answers in its life -
+   Google's at sign-in, the operator's on the phone it reached - and each is
+   a fixed set of keys with fixed colours. The keys are drawn once, as the
+   legend of two bars, and the legend is the page's control: point at a key
+   and every batch shows its share of it; press it and the list shows only
+   those Gmails. Everything else is a dot and a word. */
+:root{--fix:#c9b8f0;--g-in:#58d68d;--g-cap:#f0c064;--g-tel:#b9a4f6;--g-ref:#e0654f;--g-bad:#ef6f9f;--g-miss:#62d2e6;--g-none:#7d8fb0;
+ --o-d:#58d68d;--o-x:#f0c064;--o-o:#e0654f;--o-a:#62d2e6;--o-f:#ef6f9f}
+.gin{--kc:var(--g-in)}.gcap{--kc:var(--g-cap)}.gtel{--kc:var(--g-tel)}
+.gref{--kc:var(--g-ref)}.gbad{--kc:var(--g-bad)}.gmiss{--kc:var(--g-miss)}.gnone{--kc:var(--g-none)}
+.kd{--kc:var(--o-d)}.kx{--kc:var(--o-x)}.ko{--kc:var(--o-o)}.ka{--kc:var(--o-a)}.kf{--kc:var(--o-f)}
+
+/* ---------------------------------------------------------- the products */
+/* A product is its app tile, as on the Station and the Proxies: GPT in
+   ChatGPT's own black and white, Spotify in its green, a hand-built phone's
+   other app in blue with the Build cross - and any product as both on blue.
+   A batch kept for one product wears that product's light. */
+:root{--gpt:#e6eaf0;--spot:#5fe3a1;--other:#9ec7ff}
+.k-gpt,.p-gpt{--lc:var(--gpt)}.k-spotify,.p-spotify{--lc:var(--spot)}.k-other,.p-other{--lc:var(--other)}
+.app{width:22px;height:22px;border-radius:7px;display:grid;place-items:center;flex:none;color:#fff;
+ background:linear-gradient(180deg,#1c1c1c,#070707);box-shadow:inset 0 0 0 1px rgba(255,255,255,.08),0 8px 16px -10px rgba(0,0,0,.95)}
+.app svg{display:block;width:13px;height:13px}
+.app.spotify{color:#1ed760}
+.app.other,.app.any{background:linear-gradient(180deg,#1d3b62,#0e2240);color:#bcd8ff}
+.app .pair{display:flex;align-items:center}
+.app .pair svg{width:9px;height:9px}
+.app .pair svg+svg{margin-left:-2px}
+.app.m{width:28px;height:28px;border-radius:9px}
+.app.m svg{width:16px;height:16px}
+.app.xs{width:16px;height:16px;border-radius:5px;box-shadow:inset 0 0 0 1px rgba(255,255,255,.08)}
+.app.xs svg{width:10px;height:10px}
+.app.xs .pair svg{width:7px;height:7px}
+.app.xs .pair svg+svg{margin-left:-1px}
+/* A phone's product before its press: the tile dimmed, as an off phone's is. */
+.app.dim,.pr.wait .app{filter:saturate(.45) brightness(.66)}
+.kept-w{font-weight:400;color:var(--lc)}
+
+main{gap:46px;padding-top:30px}
+.forwhy{flex:1 1 200px;align-self:flex-end;padding-bottom:10px;font-size:12px;line-height:1.4;color:var(--dim)}
+/* A section is named in small capitals, quietly: the numbers carry it. */
+.lbl{display:flex;align-items:center;gap:12px;flex-wrap:wrap;min-height:28px;margin-bottom:16px}
+.lbl h2{margin:0;font:600 10.5px/1 var(--mono);letter-spacing:.16em;text-transform:uppercase;color:var(--dim)}
+.lbl .sp{flex:1 1 12px}
+.lbl>small{font:11.5px/1 var(--mono);color:var(--dim)}
+
+/* ------------------------------------------------------------- the stock */
+/* The stock as a line of numbers on the page itself, no frame: each a
+   place an address can be, and a press narrows the list to it. The four
+   the pool holds now sit each in a ring of what they are made of; past a
+   hairline, the spent, with a bar a day. The free count and its ring wear
+   the colour of how long the free ones last. */
+.stockline{display:flex;flex-direction:column;gap:30px}
+/* The numbers share the width evenly. */
+.nums{--gap:clamp(20px,3vw,44px);display:grid;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);align-items:start;gap:26px var(--gap)}
+.num{--gc:var(--quiet);position:relative;display:flex;flex-direction:column;align-items:flex-start;gap:12px;min-width:0;padding:0 0 12px;text-align:left}
+.num.free{--sc:var(--green);--gc:var(--sc)}
+.num.free.run-low{--sc:var(--amber)}.num.free.run-out{--sc:var(--red)}
+.num.waiting{--gc:var(--g-cap)}.num.phone{--gc:var(--blue)}.num.out{--gc:var(--g-tel)}
+/* A dial: the ring, its number inside, and a little light as on glass. */
+.num .dial{position:relative;width:100px;height:100px;flex:none;display:grid;place-items:center;border-radius:50%;
+ background:radial-gradient(circle at 50% 30%,rgba(255,255,255,.055),transparent 62%)}
+.num .ring{position:absolute;inset:0;width:100%;height:100%;overflow:visible;transform:rotate(-90deg);
+ filter:drop-shadow(0 0 8px color-mix(in srgb,var(--gc) 24%,transparent))}
+.num .ring circle{fill:none;stroke-width:2.8}
+.num .ring .bg{stroke:#1c2638}
+.num .ring .arc{stroke:var(--kc);stroke-linecap:round;transition:stroke-width .25s var(--ease)}
+.num:hover .ring .arc{stroke-width:3.3}
+.num .dial b{position:relative;font:300 28px/1 var(--mono);letter-spacing:-1.2px;color:var(--bright);transition:color .2s}
+.num.free .dial b{color:var(--sc)}
+.num.zero .dial b{color:#4a5670}
+.num .w{font-size:12.5px;color:var(--ink);transition:color .2s}
+.num::after{content:"";position:absolute;left:0;right:0;bottom:0;height:2px;border-radius:1px;background:var(--blue);transform:scaleX(0);transform-origin:left;transition:transform .25s var(--ease)}
+.num:hover .w,.num.on .w{color:var(--bright)}
+.num.on::after{transform:scaleX(1)}
+/* Under each picture, its key: a part a line, opened by the mark of its
+   colour - a dot for an arc, a bar for a bar. */
+.num .cap{display:flex;flex-direction:column;gap:6px;font:11px/1.2 var(--mono);color:#7b88a0}
+.num .cap .it{display:inline-flex;align-items:flex-start;gap:7px}
+.num .cap .mk{width:7px;height:7px;flex:none;margin-top:3px;border-radius:50%;background:var(--kc,transparent)}
+.num .cap .mk.vbar{width:4px;height:10px;margin-top:1.5px;border-radius:1.5px}
+.num .cap .q{display:block;padding-left:14px;color:var(--dim);white-space:normal}
+.num .cap .nw{white-space:nowrap}
+/* The spent, past a hairline: its number, and Google's let-ins a bar a day,
+   the seven days before and today lit. */
+.num.spent{padding-left:var(--gap);border-left:1px solid var(--line2)}
+.num.spent::after{left:var(--gap)}
+/* A number that changed moves to its new value, and its ring breathes once. */
+.num.moved .dial{animation:breathe .9s var(--ease)}
+.num.spent.moved .dial{animation:none}
+@keyframes breathe{from{box-shadow:0 0 0 0 color-mix(in srgb,var(--gc) 36%,transparent)}to{box-shadow:0 0 0 14px transparent}}
+.num.spent .dial{width:auto;display:flex;align-items:center;gap:16px;border-radius:0;background:none}
+.days{display:flex;align-items:flex-end;gap:4px;height:48px}
+.days i{width:7px;border-radius:2px 2px 0 0;background:color-mix(in srgb,var(--green) 36%,transparent)}
+.days i.now{background:var(--green);box-shadow:0 0 12px color-mix(in srgb,var(--green) 38%,transparent)}
+
+/* ------------------------------------------------------- what happened */
+/* Two lanes, one above the other, on one scale of 100%: what Google said
+   to every sign-in, what operators pressed on every phone. Each opens with
+   its one number large; its shares are pills a hair apart, lit from above
+   and glowing faintly in their own colour, as the stock's rings are. */
+.what{padding:28px 30px 22px;display:flex;flex-direction:column;gap:26px;
+ background:radial-gradient(560px 220px at 0% 0%,rgba(88,214,141,.055),transparent 70%),linear-gradient(180deg,var(--card-top),var(--card-bot))}
+.ln{display:grid;grid-template-columns:168px minmax(0,1fr) auto;grid-template-areas:"hero bar tot" "hero keys keys";align-items:center;gap:14px 26px}
+.ln+.ln{padding-top:24px;border-top:1px solid var(--line2)}
+.ln .hero{grid-area:hero;align-self:center;gap:9px}
+.ln .hero .v b{font-size:36px;letter-spacing:-1.8px}
+.ln .hero .v span{font-size:12.5px;color:var(--ink)}
+.ln .hero small{font:600 10px/1 var(--mono);letter-spacing:.16em;text-transform:uppercase;color:var(--dim)}
+.ln .tot{grid-area:tot;font:12px/1 var(--mono);color:var(--dim);text-align:right;white-space:nowrap}
+.sbar{grid-area:bar;display:flex;gap:4px;height:12px}
+.sbar i{display:block;min-width:12px;height:100%;border-radius:6px;
+ background:linear-gradient(180deg,rgba(255,255,255,.24),rgba(255,255,255,0) 62%),var(--kc);
+ box-shadow:0 6px 16px -9px var(--kc);transition:opacity .2s,filter .2s}
+.sbar.none{border-radius:6px;background:rgba(8,12,20,.5);box-shadow:inset 0 0 0 1px var(--line2)}
+.keys{grid-area:keys;display:flex;flex-wrap:wrap;gap:2px 6px;margin-top:-2px}
+.key{position:relative;display:inline-flex;align-items:center;gap:8px;height:28px;padding:0 10px 0 8px;border-radius:8px;
+ font-size:12.5px;color:var(--dim);transition:background .15s,color .15s}
+/* A key's mark is a short pill, the shape of what it names on the bar. */
+.key i{width:11px;height:6px;border-radius:3px;background:var(--kc);flex:none}
+.key b{font:500 12px/1 var(--mono);color:var(--ink)}
+.key:hover{background:var(--hover);color:var(--bright)}
+.key[aria-pressed="true"]{color:var(--bright);background:color-mix(in srgb,var(--kc) 14%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--kc) 42%,transparent)}
+.key.zero{opacity:.45}
+.keys .ksep{width:1px;height:16px;margin:0 6px;align-self:center;background:var(--line2)}
+.key.pk{--kc:var(--lc);gap:7px;padding-left:6px}
+/* Pointing at a key lights its share everywhere: the other segments of
+   its bar, and of every batch's bar, step back. */
+main[data-gf] .sbar.g i{opacity:.2}
+main[data-vf] .sbar.v i{opacity:.2}
+main[data-gf="gin"] .g .gin,main[data-gf="gcap"] .g .gcap,main[data-gf="gtel"] .g .gtel,
+main[data-gf="gref"] .g .gref,main[data-gf="gbad"] .g .gbad,main[data-gf="gmiss"] .g .gmiss,main[data-gf="gnone"] .g .gnone,
+main[data-vf="kd"] .v .kd,main[data-vf="kx"] .v .kx,main[data-vf="ko"] .v .ko,
+main[data-vf="ka"] .v .ka,main[data-vf="kf"] .v .kf{opacity:1!important}
+.defs-t{align-self:flex-start;margin-left:194px;font-size:12px}
+.defs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px 26px;margin:-6px 0 0 194px;padding-top:16px;border-top:1px solid var(--line2)}
+.defs p{margin:0;font-size:12px;line-height:1.5;color:var(--dim)}
+.defs p b{display:flex;align-items:center;gap:7px;margin-bottom:3px;font-weight:500;color:var(--ink)}
+.defs p b::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--kc)}
+.defs .try{grid-column:1/-1;padding-top:12px;border-top:1px dashed var(--line2)}
+.defs .try b{display:inline;margin:0}
+.defs .try b::before{display:none}
+/* Under each meaning, what it holds: a count and a response a line, the
+   counts in a column of their own. */
+.defs .hold{display:grid;grid-template-columns:auto minmax(0,1fr);gap:4px 10px;margin-top:9px;font:11px/1.35 var(--mono);color:#7b88a0}
+.defs .hold i{font-style:normal;text-align:right;color:var(--ink)}
+.defs .hold.none{display:block}
+
+/* --------------------------------------------------------- the batches */
+/* A card a batch, read the same way every time: nothing on it moves when a
+   key is pointed at. The name and the word on it; Google's answers and the
+   operators' presses as two rings - the first share inside, the worst other
+   one beside; and under a hairline, where its Gmails are now. */
+/* Wide enough that every word on a card stands whole: two a row on a
+   laptop, three on a wide screen. */
+.bts{display:grid;grid-template-columns:repeat(auto-fill,minmax(420px,1fr));gap:16px}
+.bt{position:relative;display:flex;flex-direction:column;gap:20px;padding:20px 18px 18px 22px;border-radius:18px;border:1px solid var(--line);
+ background:radial-gradient(440px 170px at 0% 0%,rgba(127,180,255,.045),transparent 70%),linear-gradient(180deg,var(--card-top),var(--card-bot));
+ box-shadow:inset 0 1px 0 rgba(255,255,255,.03),0 24px 46px -36px rgba(0,0,0,.9);transition:border-color .2s,transform .2s,box-shadow .25s}
+.bt:hover{border-color:var(--edge);transform:translateY(-2px)}
+.bt.on{border-color:#3f5a86;box-shadow:inset 0 0 0 1px rgba(127,180,255,.18),0 24px 46px -30px rgba(0,0,0,.95)}
+.bt.off{border-style:dashed;background:transparent;box-shadow:none}
+.bt.off .two,.bt.off .now{opacity:.55}
+.bt .hit{position:absolute;inset:0;z-index:0;border-radius:18px}
+.bt .hit:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
+.bt>*:not(.hit){position:relative;z-index:1;pointer-events:none}
+.bt .sw,.bt .more{pointer-events:auto}
+.bt .hd{display:flex;align-items:flex-start;gap:10px}
+.bt .hd>.app{margin:-3px 2px 0 0}
+.bt.kept:not(.on){border-color:color-mix(in srgb,var(--lc) 22%,var(--line))}
+.bt.kept:not(.off){background:radial-gradient(440px 170px at 0% 0%,color-mix(in srgb,var(--lc) 9%,transparent),transparent 70%),linear-gradient(180deg,var(--card-top),var(--card-bot))}
+.bt .sw{margin-top:2px}
+.bt .more{margin:-2px -2px 0 0}
+.bt .more.on{background:var(--hover);color:var(--bright)}
+.bt .nm{display:flex;flex-direction:column;gap:9px;min-width:0;flex:1}
+.bt .nm b{font:600 15.5px/1.15 var(--sans);letter-spacing:-.1px;color:var(--bright);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bt .nm small{display:flex;align-items:center;gap:9px;font:11.5px/1 var(--mono);color:var(--dim);white-space:nowrap;overflow:hidden}
+.ac-keep{--ac:var(--green)}.ac-watch{--ac:var(--amber)}.ac-stop{--ac:var(--red)}.ac-few{--ac:var(--dim)}
+/* The word on a batch: a pill in its colour. */
+.adv{display:inline-flex;align-items:center;gap:6px;flex:none;height:20px;padding:0 9px 0 8px;border-radius:999px;font:600 10.5px/1 var(--sans);letter-spacing:.02em;
+ color:var(--ac);background:color-mix(in srgb,var(--ac) 12%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--ac) 32%,transparent)}
+.adv::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--ac)}
+/* The two rings, as the stock's are drawn: the parts a hair apart. */
+.bt .two{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+.d2{display:flex;align-items:center;gap:14px;min-width:0}
+.d2 .rg{position:relative;width:62px;height:62px;flex:none;display:grid;place-items:center;border-radius:50%;
+ background:radial-gradient(circle at 50% 30%,rgba(255,255,255,.05),transparent 62%)}
+.d2 .ring{position:absolute;inset:0;width:100%;height:100%;overflow:visible;transform:rotate(-90deg)}
+.d2 .ring circle{fill:none;stroke-width:3.1}
+.d2 .ring .bg{stroke:#1c2638}
+.d2 .ring .arc{stroke:var(--kc);stroke-linecap:round;transition:opacity .18s,stroke-width .2s var(--ease)}
+/* A card's ring answers the pointer on its own: under each arc a wide
+   invisible one to land on; the part pointed at thickens, the rest step
+   back, and the middle and the words take its colour. */
+.d2 .ring .tap{fill:none;stroke:transparent;stroke-width:10;stroke-linecap:round;pointer-events:stroke;cursor:pointer}
+.d2.hot .ring .arc{opacity:.22}
+.d2.hot .ring .arc.on{opacity:1;stroke-width:4.4}
+.d2.hot .rg b,.d2.hot .t1>b{color:var(--kc)}
+.d2 .rg b,.d2 .t1>b{transition:color .18s}
+.d2 .rg b{position:relative;font:400 16px/1 var(--mono);letter-spacing:-.6px;color:var(--bright)}
+.d2 .tx{display:flex;flex-direction:column;gap:6px;min-width:0}
+.d2 .t1{display:flex;flex-wrap:wrap;align-items:center;gap:4px 12px}
+.d2 .t1>b{font-size:13px;font-weight:500;color:var(--ink)}
+.d2 .tx small{display:flex;align-items:center;gap:6px;font:11px/1.15 var(--mono);color:#8a97ab;white-space:nowrap}
+.d2 .tx small .mk{width:6px;height:6px;flex:none;border-radius:50%;background:var(--kc)}
+.d2 .tx small.of{color:var(--dim);white-space:normal}
+/* Beside Done, a tile for each product the phones were on with its own
+   Done share; pointing at one puts only that product on the ring. */
+.d2 .pl{display:inline-flex;align-items:center;gap:10px}
+.d2 .pt{display:inline-flex;align-items:center;gap:6px;pointer-events:auto;cursor:pointer;transition:opacity .18s}
+.d2 .pt b{font:500 11px/1 var(--mono);color:var(--ink)}
+.d2 .pt.few b{color:var(--dim)}
+.d2.prod .pt:not(.on){opacity:.35}
+/* Where its Gmails are now: a pill a place, a hair apart, and their words. */
+.bt .now{display:flex;flex-direction:column;gap:9px;padding-top:15px;border-top:1px solid var(--line2)}
+.nbar{display:flex;gap:3px;height:6px}
+.nbar i{display:block;min-width:6px;border-radius:3px;background:var(--kc)}
+.nkey{display:flex;flex-wrap:wrap;gap:5px 13px;font:11px/1.1 var(--mono);color:#7b88a0}
+.nkey span{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.nkey i{width:9px;height:5px;border-radius:2.5px;background:var(--kc)}
+.nkey b{font-weight:500;color:var(--ink)}
+.fig{display:flex;flex-direction:column;min-width:0}
+.fig .v{display:none;align-items:baseline;gap:8px;min-width:0}
+.fig .v b{font:300 30px/1 var(--mono);letter-spacing:-1.4px;color:var(--kc)}
+.fig .v span{font-size:12px;color:var(--dim);white-space:nowrap}
+.fig .v.na b{color:#4a5670}
+main[data-g="gin"] .fig .v.gin,main[data-g="gcap"] .fig .v.gcap,main[data-g="gtel"] .fig .v.gtel,
+main[data-g="gref"] .fig .v.gref,main[data-g="gbad"] .fig .v.gbad,main[data-g="gmiss"] .fig .v.gmiss,main[data-g="gnone"] .fig .v.gnone,
+main[data-v="kd"] .fig .v.kd,main[data-v="kx"] .fig .v.kx,main[data-v="ko"] .fig .v.ko,
+main[data-v="ka"] .fig .v.ka,main[data-v="kf"] .fig .v.kf{display:flex}
+.btmore{margin-top:14px;font-size:12px}
+
+/* ----------------------------------------------------------- the list */
+/* Over the list, as the Proxy pool has it: where the Gmails are with
+   how many in each; then Show only - each rule in its own words with how
+   many it holds, one at a time, spelled out under the row - and at its end
+   the order, said in words, opening a menu like a row's. */
+.tools{display:flex;flex-wrap:wrap;align-items:center;gap:8px 10px;margin:-4px 0 12px}
+.flags{margin:-2px 0 14px}
+.frow{display:flex;align-items:center;gap:8px 14px}
+.fl{display:flex;flex-wrap:wrap;align-items:center;gap:8px;flex:1 1 auto;min-width:0}
+#sortbox{flex:none}
+.fl>.k{margin-right:4px;font:600 10px/1 var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--dim)}
+.flag{--fc:var(--muted);height:28px;padding:0 11px 0 10px;border-radius:999px;border:1px solid var(--line);background:rgba(8,12,20,.3);
+ display:inline-flex;align-items:center;gap:7px;font:500 12px/1 var(--sans);color:var(--quiet);transition:border-color .15s,background .15s,color .15s}
+.flag::before{content:"";width:7px;height:7px;border-radius:50%;flex:none;background:var(--fc)}
+.flag b{font:500 11.5px/1 var(--mono);color:var(--ink)}
+.flag:hover:not(:disabled):not([aria-pressed="true"]){border-color:var(--edge);color:var(--bright)}
+.flag[aria-pressed="true"]{color:var(--bright);border-color:color-mix(in srgb,var(--fc) 60%,transparent);background:color-mix(in srgb,var(--fc) 14%,transparent)}
+.flag:disabled{opacity:.42;cursor:default}
+.flagwhy{margin:10px 0 0;font-size:12px;line-height:1.45;color:var(--dim)}
+.flagwhy b{font-weight:500;color:var(--ink)}
+.sortb{height:30px;padding:0 10px 0 12px;border-radius:9px;border:1px solid var(--line2);background:rgba(8,12,20,.55);
+ display:inline-flex;align-items:center;gap:8px;transition:border-color .15s,background .15s}
+.sortb small{font:600 10px/1 var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--dim)}
+.sortb b{font:500 12px/1 var(--sans);color:var(--bright);white-space:nowrap}
+.sortb svg{width:12px;height:12px;color:var(--dim)}
+.sortb:hover,.sortb.on{border-color:var(--edge);background:var(--hover)}
+.pop .sepm{height:1px;margin:4px 6px;background:var(--line2)}
+.chips{display:inline-flex;flex-wrap:wrap;gap:6px}
+.chip{height:26px;font-size:11.5px}
+.chip i{width:7px;height:7px;border-radius:50%;background:var(--kc, var(--blue));flex:none}
+.lbl .search{margin-left:0;max-width:260px}
+.lbl .count{font:11.5px/1 var(--mono);color:var(--dim)}
+table{min-width:1064px}
+thead th{background:transparent;padding:12px 14px;font:600 10px/1 var(--mono);letter-spacing:.14em;color:#6d7a92}
+thead th.tk{width:44px}
+thead th:nth-child(2){width:auto}
+thead th:nth-child(3){width:190px}
+thead th:nth-child(4){width:150px}
+thead th:nth-child(5){width:220px}
+thead th:nth-child(6){width:214px}
+thead th:last-child{width:56px}
+td{padding:12px 14px}
+tbody tr{border-bottom:1px solid rgba(29,38,54,.7)}
+.box{border-color:#3d4860}
+tr:hover .box:not(.on){border-color:#6d7a92}
+.g1{display:flex;flex-direction:column;gap:5px;min-width:0}
+.addr{align-self:flex-start;font:500 13px/1.25 var(--mono);color:var(--bright);cursor:pointer;overflow-wrap:anywhere;border-radius:4px}
+.addr:hover{color:var(--blue)}
+.g1 small{font:11px/1 var(--mono);color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.g1 small em{font-style:normal;color:var(--amber)}
+/* A state, a key, a press: a dot in its colour and a word. */
+.dw{display:inline-flex;align-items:center;gap:8px;font-size:12.5px;font-weight:500;white-space:nowrap;color:var(--ink)}
+.dw::before{content:"";width:7px;height:7px;border-radius:50%;flex:none;background:var(--kc, var(--muted))}
+.dw small{font:11px/1 var(--mono);font-weight:400;color:var(--dim)}
+.dw.none{color:#56627a;font-weight:400}
+.dw.none::before{background:transparent;box-shadow:inset 0 0 0 1.5px #3a4559}
+.s-free{--kc:var(--green);color:#a6efc4}.s-waiting{--kc:var(--amber);color:#f4d79a}
+.s-phone{--kc:var(--blue);color:#c4dbff}.s-stopped{--kc:var(--red);color:#f2a897}
+.s-aside{--kc:var(--quiet);color:var(--quiet)}.s-spent{--kc:#3a4559;color:#6d7a92;font-weight:400}
+.dw.gin,.dw.kd{color:#a6efc4}.dw.gcap,.dw.kx{color:#f4d79a}.dw.gtel{color:#d5c8fb}
+.dw.gref,.dw.ko{color:#f2a897}.dw.gbad,.dw.kf{color:#f6b0c9}.dw.gnone{color:#a9b8d3}.dw.gmiss,.dw.ka{color:#a9e6f2}
+.stc{display:inline-flex;align-items:center;gap:12px}
+/* The shared cell stacks its span; a dot and a word stay on one line. */
+.stc>span.dw{display:inline-flex;flex-direction:row;align-items:center}
+.then{display:block;margin:5px 0 0 46px;font:10.5px/1 var(--mono);color:var(--amber)}
+/* The tries before Google's word: a dot a sign-in in the colour of its
+   answer, and the tries the queue still owes as rings. */
+.gcell{display:inline-flex;align-items:center;gap:12px}
+/* How long on the phone: the time, and under it what it was - waiting
+   now, or the wait a spent one had until its press. */
+.ph{display:flex;flex-direction:column;align-items:flex-start;gap:4px;min-width:0}
+.ph b{font:500 13px/1.25 var(--mono);color:var(--ink);white-space:nowrap}
+.ph small{font:11px/1.1 var(--mono);color:var(--dim);white-space:nowrap}
+.ph.now b{color:#c4dbff}
+.ph.sig b{font:500 12.5px/1.25 var(--sans);color:var(--blue)}
+.ph.past b{font-weight:400;color:#8391a8}
+.pips{display:inline-flex;align-items:center;gap:3px}
+.pips i{width:6px;height:6px;border-radius:50%;background:var(--kc)}
+.pips i.left{background:transparent;box-shadow:inset 0 0 0 1.2px #3a4559}
+.gcell .dw::before{display:none}
+/* The category, and under it the try, the rounds, the stage or Google's
+   own words. */
+.gcell .g2{display:flex;flex-direction:column;align-items:flex-start;gap:4px;min-width:0}
+/* As tall as the address and its line beside it, so no row grows. */
+.gcell .g2 .dw{line-height:1.25}
+.gcell .g2 small{max-width:210px;font:11px/1.1 var(--mono);color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* The press: the product's tile, the key's word, and under it the product
+   and who pressed it. */
+.pr{display:inline-flex;align-items:center;gap:10px;min-width:0;max-width:100%}
+.pr .p2{display:flex;flex-direction:column;align-items:flex-start;gap:4px;min-width:0}
+.pr .dw{line-height:1.25}
+.pr .dw::before{display:none}
+.pr small{max-width:156px;font:11px/1.1 var(--mono);color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.chip .app{margin-left:-3px}
+.pop .app.xs{width:18px;height:18px}
+.pop .app.xs svg{width:11px;height:11px}
+.doors{opacity:.4;transition:opacity .15s}
+tr:hover .doors,.doors:focus-within,.doors button.on{opacity:1}
+.doors button{border-color:transparent;background:transparent}
+.doors button:hover{border-color:var(--edge)}
+
+/* ---------------------------------------------------- the Gmail's drawer */
+.draw header .id>b{font-size:15px;line-height:1.3;overflow-wrap:anywhere}
+.draw header .row{gap:12px}
+.kvs{grid-template-columns:repeat(2,minmax(0,1fr))}
+.kv{position:relative}
+.kv>.app{position:absolute;top:10px;right:10px}
+.kv b{font:400 18px/1.15 var(--sans);letter-spacing:0;color:var(--kc, var(--dim))}
+.kv small{font:11px/1.3 var(--mono)}
+.tl{display:flex;flex-direction:column}
+.tl .ev{display:grid;grid-template-columns:8px 44px minmax(0,1fr) auto;align-items:start;gap:12px;padding:6px 0}
+.tl .ev .dt{width:8px;height:8px;margin-top:5px;border-radius:50%;background:var(--kc, var(--muted))}
+.tl .ev.born .dt,.tl .ev.now .dt{background:transparent;box-shadow:inset 0 0 0 1.5px var(--edge)}
+.tl .ev.now .dt{box-shadow:inset 0 0 0 1.5px var(--blue)}
+/* What was done to it here: put back in the queue or set aside, its details changed, marked fixed. */
+.tl .ev.back,.tl .ev.queue{--kc:var(--green)}.tl .ev.aside{--kc:var(--amber)}.tl .ev.edit{--kc:var(--quiet)}
+.tl .ev .t{font:11.5px/1.5 var(--mono);color:var(--dim)}
+.tl .ev .w{min-width:0;display:flex;flex-direction:column;gap:3px}
+.tl .ev .w b{font-size:12.5px;font-weight:500;line-height:1.4;color:var(--ink)}
+.tl .ev .w b em{font-style:normal;color:var(--kc)}
+.tl .ev.born .w b,.tl .ev.now .w b{font-weight:400;color:var(--dim)}
+.tl .ev .w small{font:11px/1.4 var(--mono);color:var(--dim);overflow-wrap:anywhere}
+.tl .ev .r{display:flex;align-items:center;gap:2px;flex:none;padding-top:5px}
+.tl .ev .r i{width:2px;height:10px;border-radius:1px;background:var(--g-cap);opacity:.75}
+.tl .ev .r small{margin-left:5px;font:10.5px/1 var(--mono);color:var(--dim)}
+.tl .gap{display:grid;grid-template-columns:8px minmax(0,1fr);gap:12px;min-height:16px}
+.tl .gap i{justify-self:center;width:1px;background:repeating-linear-gradient(180deg,var(--edge) 0 3px,transparent 3px 6px)}
+.tl .gap span{align-self:center;padding-left:56px;font:10.5px/1 var(--mono);color:#56627a}
+
+/* The drawer's own doors: its details, and Mark as fixed in the violet of
+   Add Gmails - the way a mended Gmail comes back. */
+.draw footer{align-items:center}
+/* A row's doors wait at the back until the row is pointed at; the drawer's are its actions, in full. */
+.draw footer .doors{opacity:1}
+.draw footer .doors button svg{width:13px;height:13px}
+.doors button.pri{color:#e6ddff;border-color:#5a4a9a;background:rgba(111,88,224,.2)}
+.doors button.pri:hover{border-color:#7a66c8;background:rgba(111,88,224,.3);color:#fff}
+.act svg{width:13px;height:13px}
+/* Its details, open to edit: a field a line, holding what the farm has. */
+.ed{display:flex;flex-direction:column;gap:12px;margin-top:14px;padding-top:14px;border-top:1px solid var(--line2)}
+.ed .edh{margin:0;font-size:12px;line-height:1.45;color:var(--dim)}
+.ed .fld{display:grid;grid-template-columns:86px minmax(0,1fr);align-items:center;gap:6px 10px}
+.ed .fld .k{font:10px/1.2 var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--dim)}
+/* Wide enough that a whole key, in its groups of four, reads in its field. */
+.ed input,.ed textarea{width:100%;min-width:0;height:36px;padding:0 9px;border-radius:9px;border:1px solid var(--line);background:rgba(8,12,20,.5);
+ color:var(--bright);font:12px var(--mono);transition:border-color .15s}
+.ed textarea{height:auto;min-height:66px;padding:8px 9px;line-height:1.45;resize:vertical;font-family:var(--sans)}
+.ed input::placeholder,.ed textarea::placeholder{color:#56627a;font-family:var(--sans)}
+.ed input:focus,.ed textarea:focus{border-color:#6a58c4;outline:0}
+.ed [aria-invalid="true"]{border-color:#8a3a2c;box-shadow:0 0 0 3px rgba(224,101,79,.1)}
+.ed .err{margin:0;min-height:1em;font-size:12px;line-height:1.4;color:var(--bad-ink)}
+.ed .err:empty{display:none}
+.draw footer.edf{justify-content:flex-end}
+.draw footer .go{height:36px;padding:0 16px;border-radius:999px;background:linear-gradient(135deg,#5040b8,#7558e0);color:#fff;font-size:13px;font-weight:600;
+ display:inline-flex;align-items:center;gap:8px;box-shadow:inset 0 1px 0 rgba(255,255,255,.16),0 14px 28px -18px rgba(124,92,230,.9)}
+.draw footer .go:hover{background:linear-gradient(135deg,#5a48c8,#7a5ee6)}
+.draw footer .go svg{width:14px;height:14px}
+.draw footer .ghost{height:36px;padding:0 14px;border-radius:999px;border:1px solid var(--edge);color:var(--quiet);font-size:13px}
+.draw footer .ghost:hover{background:var(--hover);color:var(--bright)}
+/* A pasted Gmail coming back fixed: the return arrow in violet. */
+.read li.back svg{color:var(--fix)}
+.read li.back .u{max-width:310px;color:#d5c8fb}
+
+/* The note at the foot: its dot in the colour of what happened, and Undo
+   while it stands - its thin line runs out with it. */
+.said[data-tone="amber"]{--tc:var(--amber)}.said[data-tone="red"]{--tc:var(--red)}.said[data-tone="violet"]{--tc:var(--violet)}
+.said.can.up{pointer-events:auto}
+.said.up::after{animation:runout var(--life,3.6s) linear both}
+.said .undo{flex:none;height:26px;margin:-3px -6px -3px 2px;padding:0 11px;border-radius:8px;border:1px solid var(--edge);
+ background:rgba(255,255,255,.05);color:var(--bright);font:600 12px/1 var(--sans);transition:background .15s,border-color .15s}
+.said .undo:hover{background:rgba(255,255,255,.1);border-color:#3d4f6e}
+/* / finds a Gmail: the key, quiet, at the end of the box until it is in use. */
+.search .kc{position:absolute;right:9px;top:50%;transform:translateY(-50%);min-width:19px;height:19px;padding:0 5px;border-radius:5px;
+ border:1px solid var(--edge);background:rgba(8,12,20,.45);display:grid;place-items:center;font:500 11px/1 var(--mono);color:var(--dim);pointer-events:none}
+.search:focus-within .kc,.search input:not(:placeholder-shown)~.kc{display:none}
+.search input{padding-right:34px}
+/* The empty list: an envelope and a way back. */
+.none-row svg{display:block;width:30px;height:30px;margin:0 auto 12px;color:#3a4559}
+
+/* ------------------------------------------------------------- motion */
+.boot .num .dial b{animation:fade .6s ease both}
+/* The rings draw themselves one after another; the spent's bars grow. */
+.boot .num .ring .arc{animation:draw 1.1s var(--ease) both;animation-delay:calc(.12s + var(--u, 0) * 90ms)}
+.boot .days i{transform-origin:bottom;animation:grow .6s var(--ease) both;animation-delay:calc(.45s + var(--i, 0) * 45ms)}
+.boot .sbar i,.boot .nbar i{animation:grow-x .8s var(--ease) both;transform-origin:left}
+.boot .d2 .ring .arc{animation:draw 1s var(--ease) both;animation-delay:calc(.2s + var(--i, 0) * 45ms)}
+.boot .ln .hero{animation:fade .7s ease .15s both}
+.boot .bt{animation:rise .5s var(--ease) both;animation-delay:calc(.12s + var(--i, 0) * 45ms)}
+.bt.still{animation:none}
+@keyframes grow-x{from{transform:scaleX(0)}}
+.bt.flash{animation:cardglow 1.6s ease-out}
+.draw.opening .kvs .kv,.draw.opening .tl>*{animation:rise .35s var(--ease) both;animation-delay:calc(.08s + min(var(--i, 0), 16) * 22ms)}
+
+@media (max-width:1179px){
+ /* Too narrow for five abreast: the four rings share a row and the spent
+    takes its own under them, past a hairline above it. */
+ .nums{grid-auto-flow:row;grid-template-columns:repeat(4,minmax(0,1fr))}
+ .num.spent{grid-column:1/-1;flex-direction:row;flex-wrap:wrap;align-items:center;gap:12px 28px;padding:20px 0 12px;border-left:0;border-top:1px solid var(--line2)}
+ .num.spent::after{left:0}
+ .num.spent .dial{height:auto}
+}
+@media (max-width:1100px){
+ .defs{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+@media (max-width:820px){
+ /* The number above its bar, the total beside the number. */
+ .ln{grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"hero tot" "bar bar" "keys keys"}
+ .ln .hero .v b{font-size:30px}
+ .ln .tot{align-self:end;padding-bottom:4px}
+ .defs,.defs-t{margin-left:0}
+ .defs{grid-template-columns:1fr}
+}
+@media (max-width:560px){
+ /* A card's two rings one above the other. */
+ .bt .two{grid-template-columns:1fr}
+ /* A field's name over it, so the field has the drawer's width. */
+ .ed .fld{grid-template-columns:minmax(0,1fr);gap:6px}
+}
+@media (max-width:760px){
+ main{gap:34px;padding-top:22px}
+ /* Two numbers a row on a phone, each picture as wide as its column. */
+ .stockline{gap:22px}
+ .nums{grid-template-columns:repeat(2,minmax(0,1fr));gap:22px 18px}
+ .num{min-width:0;max-width:none}
+ .num .dial{width:80px;height:80px}
+ .num .dial b{font-size:23px}
+ .what{padding:20px 18px 18px}
+ /* The products on a line of their own under the keys. */
+ .keys .ksep{flex-basis:100%;height:4px;margin:0;background:none}
+ .bts{grid-template-columns:minmax(0,1fr)}
+ .lbl .search{flex-basis:100%;max-width:none}
+ /* As on the Proxy pool: the search first, Show only one line that
+    scrolls inside itself, and Sort on its own line under it. */
+ .tools .search{order:-1;flex-basis:100%;max-width:none;margin-left:0}
+ .fl{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;padding-bottom:2px}
+ .fl::-webkit-scrollbar{display:none}
+ .fl>*{flex:none}
+ .frow{flex-wrap:wrap}
+ .frow>.fl{flex-basis:100%}
+ thead th:nth-child(3){width:150px}
+}
+
+/* ------------------------------------------------- the port (2026-10-07) */
+/* In the admin rail the bars that float over the page centre on its
+   column, not on the window: the rail is 232px open, 68px folded and
+   always 68px below 1280px, where an open rail lies over the page; at
+   900px and below it is a bar across the top (as on the Proxies page). */
+.rail-col .sel,.rail-col .said{left:calc(50% + 116px)}
+html[data-rail="icons"] .rail-col .sel,html[data-rail="icons"] .rail-col .said{left:calc(50% + 34px)}
+@media (max-width:1279px){.rail-col .sel,.rail-col .said{left:calc(50% + 34px)}}
+@media (max-width:900px){.rail-col .sel,.rail-col .said,html[data-rail="icons"] .rail-col .sel,html[data-rail="icons"] .rail-col .said{left:50%}}
+/* Under the rail, not over it, and never wider than the column. */
+.rail-col .sel{z-index:39;max-width:calc(100% - 256px)}
+html[data-rail="icons"] .rail-col .sel{max-width:calc(100% - 92px)}
+@media (max-width:1279px){.rail-col .sel{max-width:calc(100% - 92px)}}
+@media (min-width:901px) and (max-width:1279px){html:not([data-rail="icons"]) .rail-dock{z-index:46}}
+@media (max-width:900px){.rail-col .sel,html[data-rail="icons"] .rail-col .sel{max-width:calc(100% - 24px)}}
+/* A press on its way to the farm: its doors wait. */
+body.sending .cmp .go,body.sending .draw footer button{cursor:progress}
+/* A secret the drawer is still reading from the farm. */
+.l1 .v .ld{color:var(--muted);letter-spacing:.2em}
+/* The archive drawer: a line an archived Gmail, newest first, and a box
+   to find one by its address or batch. */
+.arq{display:flex;align-items:center;gap:8px;margin:2px 0 14px;padding:0 12px;height:38px;border-radius:10px;
+ border:1px solid var(--line);background:rgba(8,12,20,.55)}
+.arq:focus-within{border-color:#3a4d6e}
+.arq svg{width:15px;height:15px;color:var(--dim);flex:none}
+.arq input{flex:1;min-width:0;height:100%;border:0;background:none;color:var(--bright);font:13px/1 var(--mono);outline:none}
+.arl{display:flex;flex-direction:column;margin:0 -8px}
+.arl>div{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:baseline;gap:5px 12px;padding:9px 8px;position:relative}
+.arl>div+div::before{content:"";position:absolute;left:8px;right:8px;top:0;height:1px;background:var(--line2)}
+.arl b{font-weight:500;font-size:13px;line-height:1.3;color:var(--bright);overflow-wrap:anywhere}
+.arl .t{font:12px/1 var(--mono);color:var(--dim);white-space:nowrap}
+.arl small{grid-column:1/-1;font:11.5px/1.4 var(--mono);color:var(--muted);overflow-wrap:anywhere}
+.arl .none{padding:9px 8px;color:var(--dim)}
+.draw.opening .arl>*{animation:rise .35s var(--ease) both;animation-delay:calc(.08s + min(var(--i, 0), 16) * 22ms)}
+@media (prefers-reduced-motion:reduce){.draw.opening .arl>*{animation:none}}
