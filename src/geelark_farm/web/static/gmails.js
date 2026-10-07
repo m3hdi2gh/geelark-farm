@@ -142,6 +142,9 @@ const ORDER = {free: 0, waiting: 1, stopped: 2, aside: 3, phone: 4, spent: 5};
 const inPlay = e => stateOf(e) === "free" || stateOf(e) === "waiting";
 /* Not used yet: can be switched in and out of the queue and kept for a product. */
 const canSwitch = e => ["free", "waiting", "stopped", "aside"].includes(stateOf(e));
+/* Remove takes any Gmail no phone is behind: an unused one, or a spent one
+   (its phone is gone) - the archive keeps it, and Undo puts it back. */
+const canRemove = e => stateOf(e) !== "phone";
 const isOut = e => stateOf(e) === "stopped" || stateOf(e) === "aside";
 const SCOPE = {free: e => stateOf(e) === "free", waiting: e => stateOf(e) === "waiting", phone: e => stateOf(e) === "phone",
   out: isOut, spent: e => stateOf(e) === "spent"};
@@ -492,6 +495,7 @@ function famMenu(key) {
   const f = famList().find(x => x.key === key);
   if (!f) return "";
   const ex = f.ex, out = ex.filter(e => isOut(e) && !unreadable(e)), play = ex.filter(inPlay), unused = ex.filter(canSwitch);
+  const spent = ex.filter(e => stateOf(e) === "spent");
   const b = (how, icon, words, bad) => '<button type="button"' + (bad ? ' class="bad"' : '') + ' data-fdo="' + how + '" data-fk="' + esc(key) + '">' + SVG(icon, 2) + words + '</button>';
   // The product its unused Gmails are for - one of the three, the current one marked.
   const kept = !unused.length ? "" : PK.concat([""]).map(l => '<button type="button" role="menuitemradio" aria-checked="' + (f.forL === l) + '"' + (f.forL === l ? ' class="on"' : '') +
@@ -499,6 +503,7 @@ function famMenu(key) {
   return [ex.length ? b("show", ICON.list, "Show its " + plural(ex.length, "Gmail")) + b("copy", ICON.copy, "Copy " + plural(ex.length, "address", "addresses")) : "", kept,
     (out.length ? b("free", ICON.back, "Put the " + out.length + " out of the queue back in") + b("mend", ICON.fix, "Mark the " + out.length + " out of the queue as fixed") : "") +
     (play.length ? b("aside", ICON.pause, "Set the " + play.length + " in the queue aside") : "") +
+    (spent.length ? b("remove-spent", ICON.trash, "Remove the " + plural(spent.length, "spent Gmail"), true) : "") +
     (unused.length ? b("remove", ICON.trash, "Remove the " + plural(unused.length, "unused Gmail"), true) : "")].filter(Boolean).join('<span class="sepm"></span>');
 }
 function renderFams() {
@@ -740,7 +745,7 @@ function renderPop() {
         (canEdit(e) ? '<button type="button" data-do="edit" data-id="' + id + '">' + SVG(ICON.edit, 2) + 'Edit details</button>' : '') +
         (canMend(e) ? '<button type="button" data-do="mend" data-id="' + id + '">' + SVG(ICON.fix, 2) + 'Mark as fixed</button>' : '')) +
       '<button type="button" data-do="copy" data-id="' + id + '">' + SVG(ICON.copy, 1.9) + 'Copy the address</button>' +
-      (canSwitch(e) ? '<button type="button" class="bad" data-do="remove" data-id="' + id + '">' + SVG(ICON.trash, 2) + 'Remove</button>' : '');
+      (canRemove(e) ? '<button type="button" class="bad" data-do="remove" data-id="' + id + '">' + SVG(ICON.trash, 2) + 'Remove</button>' : '');
   }
   if (!html) { menu = ""; p.innerHTML = ""; btn.classList.remove("on"); btn.setAttribute("aria-expanded", "false"); return; }
   let host = p;
@@ -758,6 +763,7 @@ function renderSel() {
   const host = el("sel");
   if (!ticked.size) { host.innerHTML = ""; document.querySelector("main").style.paddingBottom = ""; return; }
   const sel = GM.filter(e => ticked.has(e.id)), can = sel.filter(canSwitch), hid = sel.filter(e => !passes(e)).length;
+  const rem = sel.filter(canRemove);
   // The switch speaks for the ticked Gmails it can move.
   const swc = can.filter(e => !unreadable(e)), on = swc.filter(inPlay).length;
   const st = !swc.length ? "" : on === swc.length ? "true" : on ? "mixed" : "false";
@@ -766,7 +772,7 @@ function renderSel() {
       '<span>In the queue<small class="tab">' + on + ' of ' + swc.length + '</small></span></span>' : '') +
     (sel.some(canMend) ? '<button class="act" type="button" data-bulk="mend">' + SVG(ICON.fix, 2) + 'Mark as fixed</button>' : '') +
     '<button class="act" type="button" data-bulk="copy">Copy addresses</button>' +
-    (can.length ? '<button class="act bad" type="button" data-bulk="remove">Remove</button>' : '') +
+    (rem.length ? '<button class="act bad" type="button" data-bulk="remove">Remove' + (rem.length < sel.length ? " " + rem.length : "") + '</button>' : '') +
     '<button class="xs" type="button" data-bulk="clear" aria-label="Clear the selection">' + SVG(ICON.cross, 2.2) + '</button>';
   const bar = host.querySelector(".sel");
   if (bar) bar.innerHTML = inner; else host.innerHTML = '<div class="sel">' + inner + '</div>';
@@ -817,7 +823,7 @@ function copyText(text, what, ok) {
 const TONE = {free: "ok", mend: "ok", aside: "amber", remove: "red"};
 /* Which Gmails a press can move, as this page reads them; the farm reads
    them again. */
-const PICK = {free: e => isOut(e) && !unreadable(e), aside: inPlay, mend: canMend, remove: canSwitch};
+const PICK = {free: e => isOut(e) && !unreadable(e), aside: inPlay, mend: canMend, remove: canRemove};
 const pickFor = kind => kind.startsWith("for:") ? (e => canSwitch(e) && (e.for || "") !== kind.slice(4)) : PICK[kind] || (() => false);
 /* Why the farm left a Gmail where it was, counted. */
 const LEFTW = {phone: ["is on a phone now", "are on phones now"], spent: ["is spent", "are spent"],
@@ -845,7 +851,9 @@ function revert(reqs, addr) {
       : (addr && n === 1 ? "Undone: " + addr + " is as it was." : "Undone: the " + plural(n, "Gmail") + (n === 1 ? " is" : " are") + " as " + (n === 1 ? "it was." : "they were.")) +
         (m ? " " + m + " had moved on since and " + (m === 1 ? "stays" : "stay") + " as " + (m === 1 ? "it is." : "they are.") : ""), n ? "violet" : "amber");
     if (back && (!document.activeElement || document.activeElement === document.body || !document.activeElement.isConnected || document.activeElement.closest("#said"))) refocus(back);
-  }, a => say(a.note || a.said || "That change could not be taken back.", "amber"));
+  }, a => say(a.note || a.said || "That change could not be taken back.", "amber"),
+  // Taking back a Remove of hundreds puts each one back: it is given two minutes.
+  120000);
 }
 function apply(kind, ids, who, endSelection) {
   const rows = GM.filter(e => ids.has(e.id));
@@ -1381,10 +1389,11 @@ function onClick(ev) {
       if (!ev.detail) { const a = document.querySelector("#rows .addr"); if (a) a.focus({preventScroll: true}); }
       return; }
     if (how.startsWith("for:")) { flashFam = key; apply(how, new Set(f.ex.filter(canSwitch).map(e => e.id)), f.name); if (!ev.detail) refocus('[data-menu="' + CSS.escape("fam:" + key) + '"]'); return; }
-    const pick = how === "free" || how === "mend" ? isOut : how === "aside" ? inPlay : how === "remove" ? canSwitch : () => true;
+    const pick = how === "free" || how === "mend" ? isOut : how === "aside" ? inPlay : how === "remove" ? canSwitch
+      : how === "remove-spent" ? (e => stateOf(e) === "spent") : () => true;
     if (how !== "copy") flashFam = key;
     if (how === "free" || how === "mend") litFam = key;
-    apply(how, new Set(f.ex.filter(pick).map(e => e.id)), f.name);
+    apply(how === "remove-spent" ? "remove" : how, new Set(f.ex.filter(pick).map(e => e.id)), f.name);
     if (!ev.detail) refocus('[data-menu="' + CSS.escape("fam:" + key) + '"]');
     return;
   }

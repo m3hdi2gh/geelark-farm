@@ -1851,8 +1851,8 @@ def gmails_keep_for(book, ledger, settings, payload, client):
 
 
 def gmails_remove(book, ledger, settings, payload, client):
-    """Out of the pool and into the archive, whole: only Gmails no phone
-    has and none spent."""
+    """Out of the pool and into the archive, whole: unused Gmails and
+    spent ones - never one a phone is behind."""
     from .store import gmail_desk
 
     try:

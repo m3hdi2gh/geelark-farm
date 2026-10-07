@@ -294,6 +294,21 @@ def test_remove_archives_the_whole_row_and_undo_brings_it_back_as_it_was(desk):
     assert not desk.sql("SELECT 1 FROM resources_archive WHERE id = %s", (rid,))
 
 
+def test_remove_takes_a_spent_gmail_never_one_on_a_phone(desk):
+    """As the old manager's Remove all spent did: a spent Gmail goes to the
+    archive, and Undo brings it back spent; a phone's stays."""
+    from geelark_farm.store import gmail_desk
+
+    spent, ready, busy = (desk.gmail("sp", status="used"), desk.gmail("rd", status="ready"),
+                          desk.gmail("bz", status="in_use"))
+    got = gmail_desk.remove(desk.s, [spent, ready, busy], by="t")
+    assert [c["id"] for c in got["changed"]] == [spent]
+    assert got["left"] == {ready: "phone", busy: "phone"}
+    assert desk.row(spent) is None
+    assert gmail_desk.revert(desk.s, got["changed"], by="t")["back"] == [spent]
+    assert desk.row(spent)["status"] == "used"
+
+
 def test_keep_for_and_the_lanes_a_build_claims_from(desk):
     from geelark_farm.store import gmail_desk
     from geelark_farm.store.pgpool import PgGmailPool, ResourceTable

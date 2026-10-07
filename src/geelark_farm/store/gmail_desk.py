@@ -19,8 +19,8 @@ The places, in the page's words:
 
 Free and waiting are *in the queue*; stopped and set aside are *out of
 it*. Whatever is not on a phone and not spent is *unused*, and only an
-unused Gmail can be switched, kept for a product, marked fixed or
-removed.
+unused Gmail can be switched, kept for a product or marked fixed. Remove
+takes a spent one too: only a Gmail a phone is behind stays where it is.
 
 Each change answers what it changed, row by row, with the row's
 `updated_at` after it. That stamp is how the page's Undo (`revert`) knows
@@ -73,6 +73,11 @@ REFUSED_SINCE = ("EXISTS (SELECT 1 FROM signins s"
 MENDABLE = f"({UNUSED} AND r.error IS NULL AND ({OUT} OR {REFUSED_SINCE}))"
 #: What the switch puts back in the queue: out of it, and readable.
 QUEUEABLE = f"({OUT} AND r.error IS NULL)"
+#: What Remove takes: any Gmail no phone is behind - unused, or spent (its
+#: phone is gone), as the old manager's Remove all spent took them. The
+#: archive keeps each whole, so Undo puts it back, and a paste of a spent
+#: one is still refused.
+REMOVABLE = "lower(r.status) NOT IN ('in_use', 'ready')"
 
 #: The fields a change may write, and what each is in the table - so a
 #: revert binds every value to its own type.
@@ -279,14 +284,14 @@ def keep_for(settings: Settings, ids, lane: str, *, by: str) -> dict:
 # ------------------------------------------------------------- the archive
 def remove(settings: Settings, ids, *, by: str) -> dict:
     """Out of the pool and into the archive - the whole row kept, so it can
-    be read, counted and put back (store.pool_archive). Only an unused
-    Gmail: one on a phone or spent stays where it is."""
+    be read, counted and put back (store.pool_archive). An unused Gmail or
+    a spent one; one on a phone stays where it is."""
     ids = _ids(ids)
     with connect(settings) as conn:
         cur = conn.execute(
             f"WITH gone AS ("
             f"  SELECT r.* FROM resources r"
-            f"   WHERE r.kind = 'gmail' AND r.id = ANY(%(ids)s) AND {UNUSED}"
+            f"   WHERE r.kind = 'gmail' AND r.id = ANY(%(ids)s) AND {REMOVABLE}"
             f"   FOR UPDATE),"
             f" copied AS ("
             f"  INSERT INTO resources_archive"
@@ -306,10 +311,20 @@ def remove(settings: Settings, ids, *, by: str) -> dict:
     return answer
 
 
-def _unarchive(conn, row_id: int) -> dict | None:
+def _live_columns(conn) -> set[str]:
+    """The columns of the `resources` this connection writes to, by its own
+    name resolution - so the table the INSERT lands in is the one asked."""
+    return {r[0] for r in conn.execute(
+        "SELECT attname FROM pg_attribute"
+        " WHERE attrelid = 'resources'::regclass AND attnum > 0"
+        "   AND NOT attisdropped AND attgenerated = ''").fetchall()}
+
+
+def _unarchive(conn, row_id: int, live: set[str] | None = None) -> dict | None:
     """One archived Gmail back in the pool exactly as it was - its own id,
-    every column the table still has - unless its address is in the pool
-    again meanwhile. None when it could not go back."""
+    every column the table still has (`live`, read once by a caller that
+    puts back many) - unless its address is in the pool again meanwhile.
+    None when it could not go back."""
     got = conn.execute(
         "SELECT payload FROM resources_archive WHERE id = %s AND kind = 'gmail'"
         " FOR UPDATE", (int(row_id),)).fetchone()
@@ -320,12 +335,8 @@ def _unarchive(conn, row_id: int) -> dict | None:
     if conn.execute("SELECT 1 FROM resources WHERE kind = 'gmail'"
                     " AND lower(address) = lower(%s)", (address,)).fetchone():
         return None
-    # The columns of the `resources` this connection writes to, by its own
-    # name resolution - so the table the INSERT lands in is the one asked.
-    live = {r[0] for r in conn.execute(
-        "SELECT attname FROM pg_attribute"
-        " WHERE attrelid = 'resources'::regclass AND attnum > 0"
-        "   AND NOT attisdropped AND attgenerated = ''").fetchall()}
+    if live is None:
+        live = _live_columns(conn)
     from psycopg.types.json import Jsonb
 
     # A json column comes out of the payload as a dict or a list, and
@@ -702,11 +713,15 @@ def revert(settings: Settings, changes: list[dict], *, by: str) -> dict:
     # Newest first, and a row taken back once is expected next at the
     # stamp that taking-back left: one press can have changed a row twice.
     now_ver: dict[int, str] = {}
+    # Read once: an Undo of a Remove can put hundreds back.
+    live: set[str] | None = None
     with connect(settings) as conn:
         for change in reversed(list(changes or [])):
             row_id = int(change.get("id") or 0)
             if change.get("archived"):
-                got = _unarchive(conn, row_id)
+                if live is None:
+                    live = _live_columns(conn)
+                got = _unarchive(conn, row_id, live)
                 if got:
                     now_ver[row_id] = got["ver"]
                 (back if got else moved).append(row_id)
