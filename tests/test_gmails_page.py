@@ -420,6 +420,28 @@ def test_a_read_begun_before_a_press_is_not_kept_over_it(monkeypatch):
     gmails_read.forget()
 
 
+def test_a_gmail_the_page_cannot_place_counts_in_no_batch_of_its_own_making():
+    """A press or a sign-in of a Gmail in neither the pool nor the archive -
+    a row deleted for good - counts in the totals, and never under "No
+    seller"; a sign-in that named its batch still counts there."""
+    pool = [_row(1, "here@gmail.com", seller=""), _row(2, "kept@gmail.com", seller="LEO 1OCT")]
+    signins = [{"gmail": "gone@gmail.com", "at": _t(6, 9), "ok": True, "reason": "",
+                "seller": ""},
+               {"gmail": "gone2@gmail.com", "at": _t(6, 9), "ok": False,
+                "reason": "captcha_shown", "seller": "LEO 1OCT"},
+               {"gmail": "here@gmail.com", "at": _t(6, 9), "ok": True, "reason": "",
+                "seller": ""}]
+    presses = [{"gmail": "gone@gmail.com", "at": _t(6, 10), "button": "done", "by_name": "a",
+                "serial": "1", "lane": "gpt", "app_account": ""},
+               {"gmail": "here@gmail.com", "at": _t(6, 10), "button": "or", "by_name": "a",
+                "serial": "2", "lane": "gpt", "app_account": ""}]
+    got = gmails_read.assemble(pool, [], signins, presses, [], [], now=_t(7, 8))
+    assert sum(got["V"]["a"].values()) == 2, "both presses count in the totals"
+    assert got["batch"][""]["v"]["a"] == {"or": 1}, "only the Gmail filed without a seller"
+    assert got["batch"][""]["g"]["a"] == {"signed_in": 1}
+    assert got["batch"]["LEO 1OCT"]["g"]["a"] == {"captcha_shown": 1}
+
+
 def test_the_farms_notes_are_in_the_pages_words():
     words = gmails_read.note_words
     assert words("No phone or exit can fix this one - it is on the list to claim "

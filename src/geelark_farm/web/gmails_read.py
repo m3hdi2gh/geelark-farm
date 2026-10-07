@@ -261,9 +261,14 @@ def assemble(pool, archived, signins, presses, phones, events, *,
         t = bytry.setdefault(min(tries_at[gmail], 4), [min(tries_at[gmail], 4), 0, 0])
         t[1] += 1
         t[2] += 1 if ok else 0
+        # A Gmail in neither the pool nor the archive (an alias it signed
+        # in as, or a row deleted for good) counts for the batch its sign-in
+        # named - and for none when that was blank: "No seller" is the
+        # Gmails filed without one, not every Gmail the page cannot place.
         key = seller_of.get(gmail, str(s.get("seller") or ""))
-        for r in _ranges(when, since):
-            _bump(batch_of(key)["g"][r], reason)
+        if gmail in seller_of or key:
+            for r in _ranges(when, since):
+                _bump(batch_of(key)["g"][r], reason)
         tries_of.setdefault(gmail, []).append([
             when, 1 if ok else 0, reason, int(s.get("captcha_rounds") or 0),
             int(round(float(s.get("seconds") or 0))), str(s.get("serial") or ""),
@@ -289,12 +294,15 @@ def assemble(pool, archived, signins, presses, phones, events, *,
         when = local(p["at"])
         gmail = str(p.get("gmail") or "").lower()
         lane = _lane(p.get("lane"), p.get("app_account"), spotify)
-        key = seller_of.get(gmail, "")
+        # Counted in the totals always; in a batch only when the Gmail is
+        # still somewhere to say which (see the sign-ins above).
+        key = seller_of.get(gmail)
         for r in _ranges(when, since):
             _bump(V[r], button)
             _bump(VP[r].setdefault(lane, {}), button)
-            _bump(batch_of(key)["v"][r], button)
-            _bump(VPB.setdefault(key, empty())[r].setdefault(lane, {}), button)
+            if key is not None:
+                _bump(batch_of(key)["v"][r], button)
+                _bump(VPB.setdefault(key, empty())[r].setdefault(lane, {}), button)
         presses_of.setdefault(gmail, []).append(
             [when, CODE[button], str(p.get("by_name") or ""),
              str(p.get("serial") or ""), lane])
