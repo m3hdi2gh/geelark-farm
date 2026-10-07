@@ -128,6 +128,7 @@ const ICON = {
  fix: '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>',
  edit: '<path d="M17 3a2.83 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/>',
  mail: '<rect x="3" y="5.5" width="18" height="13" rx="2.6"/><path d="M4 7.5l8 6 8-6"/>',
+ box: '<rect x="3" y="4" width="18" height="5" rx="1.5"/><path d="M5 9v9.5A1.5 1.5 0 0 0 6.5 20h11a1.5 1.5 0 0 0 1.5-1.5V9"/><path d="M10 13h4"/>',
 };
 
 /* --------------------------------------------------------- where it stands */
@@ -372,6 +373,9 @@ const famOf = sell => {
 /* A row's line names its batch, and the day it was bought when the name
    does not already say it. */
 const bought = e => { const d = day(e.bought || e.added), f = famOf(e.sell); return !d || f.endsWith(" · " + d) ? "" : " · bought " + esc(d); };
+/* The names a batch was typed under: its rows in the archive are found
+   by these, since the farm keeps each as it was typed. */
+const famSellers = key => Object.keys(DATA.batch || {}).filter(k => famOf(k) === key);
 const noFam = () => ({n: 0, arch: 0, g: {t: {}, d: {}, a: {}}, v: {t: {}, d: {}, a: {}}, vp: {t: {}, d: {}, a: {}}, first: "", last: ""});
 let famSeq = null, famsDrawn = false;
 function famList() {
@@ -485,6 +489,9 @@ const WHERE = [["free", "free", "var(--green)"], ["waiting", "waiting", "var(--a
 function whereNow(f) {
   const c = {free: 0, waiting: 0, phone: 0, out: 0, spent: 0, arch: f.arch || 0};
   f.ex.forEach(e => { const s = stateOf(e); c[s === "stopped" || s === "aside" ? "out" : s]++; });
+  // Nothing of it left in the pool: the bar says where every one went.
+  if (!f.ex.length && c.arch) return '<span class="now gone"><span class="nbar" aria-hidden="true"><i style="flex:1;--kc:var(--edge)"></i></span>' +
+    '<span class="nkey"><span><i style="--kc:var(--edge)"></i><b class="tab">All ' + c.arch + '</b> in the archive \u00b7 none left in the pool</span></span></span>';
   const parts = WHERE.filter(([k]) => c[k]);
   return '<span class="now"><span class="nbar" aria-hidden="true">' + parts.map(([k, , col]) => '<i style="flex:' + c[k] + ';--kc:' + col + '"></i>').join("") + '</span>' +
     '<span class="nkey">' + parts.map(([k, w, col]) => '<span><i style="--kc:' + col + '"></i><b class="tab">' + c[k] + '</b> ' + w + '</span>').join("") + '</span></span>';
@@ -507,7 +514,10 @@ function famMenu(key) {
     (unused.length ? b("remove", ICON.trash, "Remove the " + plural(unused.length, "unused Gmail"), true) : "")].filter(Boolean).join('<span class="sepm"></span>');
 }
 function renderFams() {
-  const every = famList(), here = every.filter(f => f.ex.length), all = view.old ? every : here;
+  // The batches with Gmails in the pool first; those whose every Gmail is
+  // in the archive after them, under their own heading, when asked for.
+  const every = famList(), here = every.filter(f => f.ex.length), gone = every.filter(f => !f.ex.length);
+  const all = view.old ? here.concat(gone) : here;
   const still = famsDrawn ? " still" : "";
   famsDrawn = true;
   el("btsum").textContent = here.filter(f => f.on).length + " of " + here.length + " in the queue";
@@ -516,17 +526,22 @@ function renderFams() {
     const k = esc(f.key), when = f.when && f.name !== f.when && !f.name.endsWith(" · " + f.when) ? " · " + esc(f.when) : "";
     const open = menu === "fam:" + f.key, word = f.adv[1][0].toUpperCase() + f.adv[1].slice(1);
     // A batch kept for one product wears that product's tile and its light.
-    const kf = f.forL;
-    return '<div class="bt' + (kf ? " kept k-" + kf : "") + (view.fam === f.key ? " on" : "") + (f.switchable && !f.on ? " off" : "") + (flashFam === f.key ? " flash" : "") + still + '" style="--i:' + i + '">' +
-      '<button class="hit" type="button" data-fam="' + k + '" aria-pressed="' + (view.fam === f.key) + '" aria-label="Show only the Gmails of ' + esc(f.name) + '"></button>' +
+    const kf = f.forL, out = !f.ex.length;
+    return (out && i === here.length ? '<div class="btgap"><b>In the archive</b><small>' + plural(gone.length, "batch", "batches") +
+        ' whose Gmails were all spent or removed \u2014 none left in the pool to remove.</small></div>' : '') +
+      '<div class="bt' + (kf ? " kept k-" + kf : "") + (out ? " gone" : "") + (view.fam === f.key ? " on" : "") + (f.switchable && !f.on ? " off" : "") + (flashFam === f.key ? " flash" : "") + still + '" style="--i:' + i + '">' +
+      (out ? '<button class="hit" type="button" data-arcf="' + k + '" aria-label="Show the Gmails of ' + esc(f.name) + ' in the archive"></button>'
+        : '<button class="hit" type="button" data-fam="' + k + '" aria-pressed="' + (view.fam === f.key) + '" aria-label="Show only the Gmails of ' + esc(f.name) + '"></button>') +
       '<span class="hd">' + (kf ? tile(kf, "m") : '') + '<span class="nm"><b>' + esc(f.name) + '</b><small><span class="adv ac-' + f.adv[0] + '">' + word + '</span>' +
       (kf ? '<span class="kept-w">kept for ' + PW[kf] + '</span>' : '') + f.n + ' bought' + when + '</small></span>' +
       (f.switchable ? '<button class="sw' + (litFam === f.key ? ' lit' : '') + '" type="button" role="switch" aria-checked="' + f.on + '" data-bsw="' + k + '" aria-label="' + esc(f.name) + ' in the queue" title="' + (f.on ? "In the queue: turn off to set its Gmails aside" : "Out of the queue: turn on to put its Gmails back") + '"><i></i></button>' : '') +
-      (f.ex.length ? '<button class="xs more' + (open ? ' on' : '') + '" type="button" data-menu="fam:' + k + '" aria-haspopup="menu" aria-expanded="' + open + '" aria-label="More for ' + esc(f.name) + '">' + SVG(ICON.more, 2) + '</button>' : '') + '</span>' +
+      (f.ex.length ? '<button class="xs more' + (open ? ' on' : '') + '" type="button" data-menu="fam:' + k + '" aria-haspopup="menu" aria-expanded="' + open + '" aria-label="More for ' + esc(f.name) + '">' + SVG(ICON.more, 2) + '</button>'
+        : '<button class="arcb" type="button" data-arcf="' + k + '" title="Every Gmail of it is in the archive: open them there">' + SVG(ICON.box, 1.9) + 'In the archive</button>') + '</span>' +
       '<span class="two">' + cardDial("g", GK, GLOW, f.g, f.gn, "sign-in") + cardDial("v", VK, VW, f.v, f.vn, "phone", f.vp, f.key) + '</span>' + whereNow(f) + '</div>';
   }).join("");
   const older = every.length - here.length;
-  el("btmore").innerHTML = older ? '<button class="link btmore" type="button" data-old="1">' + (view.old ? "Hide the " + plural(older, "spent batch", "spent batches") : "Show the " + plural(older, "spent batch", "spent batches") + " too") + '</button>' : '';
+  el("btmore").innerHTML = older ? '<button class="link btmore" type="button" data-old="1">' + (view.old ? "Hide the " + plural(older, "batch", "batches") + " in the archive"
+    : "Show the " + plural(older, "batch", "batches") + " already in the archive") + '</button>' : '';
   flashFam = "";
 }
 
@@ -908,6 +923,7 @@ function closeLayer() {
   // An archive search on its way is for a drawer that is gone.
   clearTimeout(archTimer);
   archAsk++;
+  archFam = null;
   // A Gmail's details are read again each time its drawer opens.
   SEC.clear();
   el("layer").innerHTML = "";
@@ -925,6 +941,7 @@ function openDrawer(id, from) {
   // An archive answer still on its way must not take this drawer's place.
   clearTimeout(archTimer);
   archAsk++;
+  archFam = null;
   el("layer").innerHTML = '<div class="scrim"></div><aside class="draw opening" role="dialog" aria-modal="true" aria-label="' + esc(e.a) + '" data-id="' + e.id + '">' + drawerHtml(e) + '</aside>';
   document.documentElement.classList.add("locked");
   const a = el("layer").querySelector(".draw");
@@ -1321,7 +1338,7 @@ function closeMenu(back) {
   menuFrom = null;
 }
 const FOCUS_KEYS = ["data-seg", "data-k", "data-tick", "data-psw", "data-bsw", "data-keep", "data-menu", "data-fam", "data-open", "data-clear", "data-scope", "data-key", "data-prod", "data-defs", "data-flag", "data-pick",
-  "data-bulk", "data-old", "data-what", "data-do"];
+  "data-bulk", "data-old", "data-what", "data-do", "data-arcf", "data-archall"];
 // A batch's key is typed by hand: escaped, so no seller's name breaks a selector.
 const focusKey = a => !a || a === document.body || !a.hasAttribute ? "" : FOCUS_KEYS.map(k => a.hasAttribute(k) ? "[" + k + '="' + CSS.escape(a.getAttribute(k)) + '"]' : "").join("");
 function refocus(key) {
@@ -1435,6 +1452,10 @@ function onClick(ev) {
   // A product's tile on a batch card: that batch's Gmails used on that product.
   const pt = t.closest(".pt");
   if (pt) { view.fam = pt.dataset.fk; view.prod = pt.dataset.l; whatWas.h = ""; renderWhat(); renderFams(); renderList(); toList(); return; }
+  // A batch with nothing left in the pool: its Gmails, in the archive.
+  const af = t.closest("[data-arcf]");
+  if (af) { const f = famList().find(x => x.key === af.dataset.arcf); if (f) openArchive(af, "", {name: f.name, sellers: famSellers(f.key)}); return; }
+  if (t.closest("[data-archall]")) { const q = el("arq"); openArchive(null, q ? q.value.trim() : "", null); return; }
   const fc = t.closest("[data-fam]");
   if (fc) { view.fam = view.fam === fc.dataset.fam ? "" : fc.dataset.fam; renderFams(); renderList(); if (view.fam) toList(); return; }
   const bk = t.closest("[data-bulk]");
@@ -1457,7 +1478,7 @@ function onClick(ev) {
   if (th) { if (view.sort === th.dataset.sort) view.dir *= -1; else { view.sort = th.dataset.sort; view.dir = SORTS[th.dataset.sort].dir; } renderList(); return; }
   const open = t.closest("[data-open]");
   if (open) { openDrawer(+open.dataset.open); return; }
-  if (t.closest("#see-arch")) { openArchive(t.closest("#see-arch"), ""); return; }
+  if (t.closest("#see-arch")) { openArchive(t.closest("#see-arch"), "", null); return; }
 }
 document.addEventListener("click", ev => {
   const a = document.activeElement, fk = focusKey(a);
@@ -1725,19 +1746,32 @@ function archLines(rows) {
     : '<div class="none">Nothing in the archive matches that.</div>';
 }
 let archAsk = 0;
-function openArchive(from, q) {
+/* The batch the archive drawer is narrowed to - {name, sellers} - or null
+   for the whole archive. A search within it stays within it. */
+let archFam = null;
+const archScope = fam => fam ? '<div class="arscope"><span>Batch <b>' + esc(fam.name) + '</b></span><button class="link" type="button" data-archall="1">Show the whole archive</button></div>' : "";
+function openArchive(from, q, fam) {
   const mine = ++archAsk;
-  get("/pools/gmail/archive" + (q ? "?q=" + encodeURIComponent(q) : "")).then(a => {
+  // Given, the drawer is narrowed to that batch or (null) opened on all of
+  // it; not given - a search typed in the drawer - it keeps its scope.
+  const scope = fam === undefined ? archFam : fam;
+  const ps = [q ? "q=" + encodeURIComponent(q) : ""].concat(scope ? scope.sellers.map(s => "seller=" + encodeURIComponent(s)) : []).filter(Boolean);
+  get("/pools/gmail/archive" + (ps.length ? "?" + ps.join("&") : "")).then(a => {
     if (mine !== archAsk) return;
     if (!a.ok) { if (a.go) { location.href = a.go; return; } say(a.note || "The archive could not be read just now.", "amber"); return; }
     const rows = a.rows || [], total = a.total || 0, hits = a.matched == null ? rows.length : a.matched;
-    const head = !total ? "Nothing has been archived yet."
+    const head = !total ? (scope ? "Nothing of " + scope.name + " is in the archive." : "Nothing has been archived yet.")
       : q ? (!hits ? "Nothing in the archive matches that." : hits > rows.length ? "The newest " + rows.length + " of the " + hits + " that match"
         : hits === 1 ? "1 Gmail of " + total + " matches" : hits + " Gmails of " + total + " match")
+      : scope ? (rows.length < total ? "The newest " + rows.length + " of the " + total : "All " + total) + " Gmails of " + scope.name + ", newest first: spent on a phone, or removed by a person."
       : (rows.length < total ? "The newest " + rows.length + " of " + total : "All " + total) + ", newest first: spent on a phone, or removed by a person.";
+    archFam = scope;
     const open = el("layer").querySelector(".draw[data-arch]");
     if (open) {
       open.querySelector(".why").textContent = head;
+      const sc = open.querySelector(".arscope");
+      if (sc) sc.remove();
+      if (scope) open.querySelector(".arq").insertAdjacentHTML("beforebegin", archScope(scope));
       open.querySelector(".arl").innerHTML = archLines(rows);
       return;
     }
@@ -1747,7 +1781,7 @@ function openArchive(from, q) {
     drawerFrom = from;
     el("layer").innerHTML = '<div class="scrim"></div><aside class="draw opening" role="dialog" aria-modal="true" aria-label="Archived Gmails" data-arch="1">' +
       '<header><span class="id"><b>Archived Gmails</b><small class="why">' + esc(head) + '</small></span><button class="xbtn" type="button" data-close="1" aria-label="Close">' + SVG(ICON.cross, 2.2) + '</button></header>' +
-      '<div class="body"><label class="arq">' + SVG('<circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/>', 2) +
+      '<div class="body">' + archScope(scope) + '<label class="arq">' + SVG('<circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/>', 2) +
       '<input id="arq" type="search" placeholder="Find an address or a batch" autocomplete="off" spellcheck="false" aria-label="Find an archived Gmail"></label>' +
       '<div class="arl">' + archLines(rows) + '</div></div></aside>';
     document.documentElement.classList.add("locked");

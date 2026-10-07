@@ -606,6 +606,25 @@ main[data-g="gref"] .fig .v.gref,main[data-g="gbad"] .fig .v.gbad,main[data-g="g
 main[data-v="kd"] .fig .v.kd,main[data-v="kx"] .fig .v.kx,main[data-v="ko"] .fig .v.ko,
 main[data-v="ka"] .fig .v.ka,main[data-v="kf"] .fig .v.kf{display:flex}
 .btmore{margin-top:14px;font-size:12px}
+/* Batches with no Gmail left in the pool: every one spent or removed. They
+   come after the others, under their own heading, quieter, and say so where
+   the switch and the menu would be. */
+.btgap{grid-column:1/-1;display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 14px;margin:12px 2px -2px;padding-top:20px;border-top:1px solid var(--line2)}
+.btgap b{font:600 10.5px/1 var(--mono);letter-spacing:.16em;text-transform:uppercase;color:var(--dim)}
+.btgap small{font-size:12px;line-height:1.45;color:var(--dim)}
+.bt.gone{background:rgba(10,14,22,.35);border-color:var(--line2);box-shadow:none}
+.bt.gone .two{opacity:.72}
+/* Its tag takes the menu's place and more: the line under the name wraps
+   rather than cut the days off. */
+.bt.gone .nm small{flex-wrap:wrap;row-gap:7px;white-space:normal}
+.bt .arcb{pointer-events:auto;display:inline-flex;align-items:center;gap:7px;flex:none;height:26px;margin:-3px -2px 0 0;padding:0 11px 0 9px;border-radius:999px;
+  border:1px solid var(--line);background:rgba(8,12,20,.45);font:500 11.5px/1 var(--sans);color:var(--muted);white-space:nowrap;transition:color .15s,border-color .15s,background .15s}
+.bt .arcb svg{width:14px;height:14px;flex:none}
+.bt .arcb:hover,.bt .arcb:focus-visible{color:var(--bright);border-color:var(--edge);background:var(--hover)}
+.bt.gone .hit:hover~.hd .arcb{color:var(--bright);border-color:var(--edge)}
+.now.gone .nkey b{color:var(--muted)}
+.arscope{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:6px 12px;margin:0 0 12px;font-size:12.5px;color:var(--dim)}
+.arscope b{font-weight:600;color:var(--bright)}
 
 /* ----------------------------------------------------------- the list */
 /* Over the list, as the Proxy pool has it: where the Gmails are with

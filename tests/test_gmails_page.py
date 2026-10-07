@@ -134,6 +134,22 @@ def test_the_state_is_json_and_a_304_when_nothing_moved(web, desk):
     assert status == 304 and not body
 
 
+def test_a_batchs_archive_is_asked_for_by_the_names_it_was_typed_under(web, desk,
+                                                                      monkeypatch):
+    """A batch with nothing left in the pool opens the archive on itself:
+    the page sends every name the batch was typed under, a blank one too
+    ("No seller"), and the whole archive is asked without any."""
+    asked = []
+    monkeypatch.setattr(gmails_read, "archive", lambda s, q="", limit=400, sellers=None: (
+        asked.append((q, sellers)) or {"total": 0, "matched": 0, "rows": []}))
+    client = web()
+    client.login()
+    _json(client, "/pools/gmail/archive?seller=LEO%2025SEP&seller=leo%2025%20sep&q=ab")
+    _json(client, "/pools/gmail/archive?seller=")
+    _json(client, "/pools/gmail/archive?q=x")
+    assert asked == [("ab", ["LEO 25SEP", "leo 25 sep"]), ("", [""]), ("x", None)]
+
+
 def test_a_request_waited_on_is_told_without_what_a_person_typed(web, desk):
     client = web()
     client.login()

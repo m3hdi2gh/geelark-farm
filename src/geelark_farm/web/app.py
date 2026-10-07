@@ -233,8 +233,12 @@ class _Handler(BaseHTTPRequestHandler):
             if path == "/pools/gmail/archive":
                 from . import gmails_read
 
+                # One batch's, by the names it was typed under - a blank
+                # name is a batch too ("No seller").
+                sellers = parse_qs(self.path.partition("?")[2],
+                                   keep_blank_values=True).get("seller")
                 return self._json(200, dict(gmails_read.archive(
-                    self.settings, q=first.get("q", "")), ok=True))
+                    self.settings, q=first.get("q", ""), sellers=sellers), ok=True))
             if path == "/pools/gmail":
                 from ..store import gmail_desk
                 from . import gmail_pages, gmails_read

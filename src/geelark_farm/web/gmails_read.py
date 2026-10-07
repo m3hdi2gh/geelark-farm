@@ -450,25 +450,31 @@ def etag(answer: dict) -> str:
     return '"' + hashlib.sha256(text.encode("utf-8")).hexdigest()[:20] + '"'
 
 
-def archive(settings: Settings, *, q: str = "", limit: int = 400) -> dict:
+def archive(settings: Settings, *, q: str = "", limit: int = 400,
+            sellers: list[str] | None = None) -> dict:
     """The archived Gmails, newest first - those matching `q` when given -
-    for the page's archive drawer: {rows, total, matched}."""
+    for the page's archive drawer: {rows, total, matched}. With `sellers`,
+    one batch's alone: the names it was typed under, exactly (the page
+    merges "LEO 25SEP" and "leo 25 sep" into one batch), and `total` is
+    that batch's."""
     from ..store.db import Store
 
     q = str(q or "").strip().lower()[:80]
-    like = f"%{q}%"
+    where = "kind = 'gmail'"
+    params = {"q": q, "like": f"%{q}%", "limit": max(1, min(int(limit), 2000))}
+    if sellers is not None:
+        where += " AND seller = ANY(%(sellers)s)"
+        params["sellers"] = [str(s)[:80] for s in list(sellers)[:50]]
+    hit = "(%(q)s = '' OR lower(address) LIKE %(like)s OR lower(seller) LIKE %(like)s)"
     with Store(settings) as store:
         rows = store._rows(
-            "SELECT id, address, seller, status, archived_at, archived_by,"
-            " payload->>'used_at' AS used_at"
-            " FROM resources_archive WHERE kind = 'gmail'"
-            "   AND (%s = '' OR lower(address) LIKE %s OR lower(seller) LIKE %s)"
-            " ORDER BY archived_at DESC, id DESC LIMIT %s",
-            (q, like, like, max(1, min(int(limit), 2000))))
+            f"SELECT id, address, seller, status, archived_at, archived_by,"
+            f" payload->>'used_at' AS used_at"
+            f" FROM resources_archive WHERE {where} AND {hit}"
+            f" ORDER BY archived_at DESC, id DESC LIMIT %(limit)s", params)
         counted = (store._rows(
-            "SELECT count(*) AS n, count(*) FILTER (WHERE %s = ''"
-            "   OR lower(address) LIKE %s OR lower(seller) LIKE %s) AS hits"
-            " FROM resources_archive WHERE kind = 'gmail'", (q, like, like))
+            f"SELECT count(*) AS n, count(*) FILTER (WHERE {hit}) AS hits"
+            f" FROM resources_archive WHERE {where}", params)
             or [{"n": 0, "hits": 0}])[0]
     return {"total": int(counted["n"] or 0), "matched": int(counted["hits"] or 0),
             "rows": [
