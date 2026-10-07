@@ -1859,7 +1859,7 @@ def gmails_remove(book, ledger, settings, payload, client):
         got = gmail_desk.remove(settings, payload.get("ids"), by=_by(payload))
     except gmail_desk.Refused as exc:
         return _desk_refused(exc)
-    return _desk_answer(got, "removed to the archive", _by(payload))
+    return _desk_answer(got, "moved to the archive", _by(payload))
 
 
 def gmail_save(book, ledger, settings, payload, client):

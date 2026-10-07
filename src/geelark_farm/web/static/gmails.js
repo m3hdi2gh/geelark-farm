@@ -143,8 +143,8 @@ const ORDER = {free: 0, waiting: 1, stopped: 2, aside: 3, phone: 4, spent: 5};
 const inPlay = e => stateOf(e) === "free" || stateOf(e) === "waiting";
 /* Not used yet: can be switched in and out of the queue and kept for a product. */
 const canSwitch = e => ["free", "waiting", "stopped", "aside"].includes(stateOf(e));
-/* Remove takes any Gmail no phone is behind: an unused one, or a spent one
-   (its phone is gone) - the archive keeps it, and Undo puts it back. */
+/* Archive takes any Gmail no phone is behind: an unused one, or a spent
+   one (its phone is gone) - the archive keeps it, and Undo puts it back. */
 const canRemove = e => stateOf(e) !== "phone";
 const isOut = e => stateOf(e) === "stopped" || stateOf(e) === "aside";
 const SCOPE = {free: e => stateOf(e) === "free", waiting: e => stateOf(e) === "waiting", phone: e => stateOf(e) === "phone",
@@ -502,7 +502,7 @@ function famMenu(key) {
   const f = famList().find(x => x.key === key);
   if (!f) return "";
   const ex = f.ex, out = ex.filter(e => isOut(e) && !unreadable(e)), play = ex.filter(inPlay), unused = ex.filter(canSwitch);
-  const spent = ex.filter(e => stateOf(e) === "spent");
+  const spent = ex.filter(e => stateOf(e) === "spent"), arch = ex.filter(canRemove), held = ex.length - arch.length;
   const b = (how, icon, words, bad) => '<button type="button"' + (bad ? ' class="bad"' : '') + ' data-fdo="' + how + '" data-fk="' + esc(key) + '">' + SVG(icon, 2) + words + '</button>';
   // The product its unused Gmails are for - one of the three, the current one marked.
   const kept = !unused.length ? "" : PK.concat([""]).map(l => '<button type="button" role="menuitemradio" aria-checked="' + (f.forL === l) + '"' + (f.forL === l ? ' class="on"' : '') +
@@ -510,8 +510,11 @@ function famMenu(key) {
   return [ex.length ? b("show", ICON.list, "Show its " + plural(ex.length, "Gmail")) + b("copy", ICON.copy, "Copy " + plural(ex.length, "address", "addresses")) : "", kept,
     (out.length ? b("free", ICON.back, "Put the " + out.length + " out of the queue back in") + b("mend", ICON.fix, "Mark the " + out.length + " out of the queue as fixed") : "") +
     (play.length ? b("aside", ICON.pause, "Set the " + play.length + " in the queue aside") : "") +
-    (spent.length ? b("remove-spent", ICON.trash, "Remove the " + plural(spent.length, "spent Gmail"), true) : "") +
-    (unused.length ? b("remove", ICON.trash, "Remove the " + plural(unused.length, "unused Gmail"), true) : "")].filter(Boolean).join('<span class="sepm"></span>');
+    // Into the archive: its spent ones alone, or the whole batch - a Gmail
+    // on a phone always stays.
+    (spent.length && spent.length < arch.length ? b("remove-spent", ICON.box, "Archive its " + plural(spent.length, "spent Gmail"), true) : "") +
+    (arch.length ? b("remove-all", ICON.box, held ? "Archive the batch \u00b7 " + plural(arch.length, "Gmail") + ", the " + held + " on a phone stay"
+      : "Archive the whole batch \u00b7 " + plural(arch.length, "Gmail"), true) : "")].filter(Boolean).join('<span class="sepm"></span>');
 }
 function renderFams() {
   // The batches with Gmails in the pool first; those whose every Gmail is
@@ -528,7 +531,7 @@ function renderFams() {
     // A batch kept for one product wears that product's tile and its light.
     const kf = f.forL, out = !f.ex.length;
     return (out && i === here.length ? '<div class="btgap"><b>In the archive</b><small>' + plural(gone.length, "batch", "batches") +
-        ' whose Gmails were all spent or removed \u2014 none left in the pool to remove.</small></div>' : '') +
+        ' whose Gmails were all spent or archived \u2014 none left in the pool.</small></div>' : '') +
       '<div class="bt' + (kf ? " kept k-" + kf : "") + (out ? " gone" : "") + (view.fam === f.key ? " on" : "") + (f.switchable && !f.on ? " off" : "") + (flashFam === f.key ? " flash" : "") + still + '" style="--i:' + i + '">' +
       (out ? '<button class="hit" type="button" data-arcf="' + k + '" aria-label="Show the Gmails of ' + esc(f.name) + ' in the archive"></button>'
         : '<button class="hit" type="button" data-fam="' + k + '" aria-pressed="' + (view.fam === f.key) + '" aria-label="Show only the Gmails of ' + esc(f.name) + '"></button>') +
@@ -760,7 +763,7 @@ function renderPop() {
         (canEdit(e) ? '<button type="button" data-do="edit" data-id="' + id + '">' + SVG(ICON.edit, 2) + 'Edit details</button>' : '') +
         (canMend(e) ? '<button type="button" data-do="mend" data-id="' + id + '">' + SVG(ICON.fix, 2) + 'Mark as fixed</button>' : '')) +
       '<button type="button" data-do="copy" data-id="' + id + '">' + SVG(ICON.copy, 1.9) + 'Copy the address</button>' +
-      (canRemove(e) ? '<button type="button" class="bad" data-do="remove" data-id="' + id + '">' + SVG(ICON.trash, 2) + 'Remove</button>' : '');
+      (canRemove(e) ? '<button type="button" class="bad" data-do="remove" data-id="' + id + '">' + SVG(ICON.box, 1.9) + 'Archive</button>' : '');
   }
   if (!html) { menu = ""; p.innerHTML = ""; btn.classList.remove("on"); btn.setAttribute("aria-expanded", "false"); return; }
   let host = p;
@@ -787,7 +790,7 @@ function renderSel() {
       '<span>In the queue<small class="tab">' + on + ' of ' + swc.length + '</small></span></span>' : '') +
     (sel.some(canMend) ? '<button class="act" type="button" data-bulk="mend">' + SVG(ICON.fix, 2) + 'Mark as fixed</button>' : '') +
     '<button class="act" type="button" data-bulk="copy">Copy addresses</button>' +
-    (rem.length ? '<button class="act bad" type="button" data-bulk="remove">Remove' + (rem.length < sel.length ? " " + rem.length : "") + '</button>' : '') +
+    (rem.length ? '<button class="act bad" type="button" data-bulk="remove">Archive' + (rem.length < sel.length ? " " + rem.length : "") + '</button>' : '') +
     '<button class="xs" type="button" data-bulk="clear" aria-label="Clear the selection">' + SVG(ICON.cross, 2.2) + '</button>';
   const bar = host.querySelector(".sel");
   if (bar) bar.innerHTML = inner; else host.innerHTML = '<div class="sel">' + inner + '</div>';
@@ -798,7 +801,7 @@ function renderAll() { renderStock(); renderWhat(); renderFams(); renderList(); 
 
 /* ----------------------------------------------------------------- acts */
 /* A note at the foot of the page, its dot in the colour of what happened:
-   green back in the pool, amber set aside, red removed, violet changed. A
+   green back in the pool, amber set aside, red archived, violet changed. A
    change that can be taken back says Undo - the last one, while its note
    stands, or Ctrl+Z. */
 let undoFn = null;
@@ -894,7 +897,7 @@ function apply(kind, ids, who, endSelection) {
     setTimeout(() => litIds.clear());
     litFam = "";
     const l = kind.startsWith("for:") ? kind.slice(4) : "";
-    const words = kind === "free" ? "back in the queue" : kind === "aside" ? "set aside" : kind === "remove" ? "removed to the archive"
+    const words = kind === "free" ? "back in the queue" : kind === "aside" ? "set aside" : kind === "remove" ? "moved to the archive"
       : kind === "mend" ? "back in the pool as fixed; " + (n === 1 ? "its" : "their") + " tries start again"
       : l ? "kept for " + PW[l] + "; " + PW[PX[l]] + " builds pass " + (n === 1 ? "it" : "them") + " by" : "open to any product again";
     const one = who ? who + ": " + n : n === 1 && only ? only : plural(n, "Gmail");
@@ -1021,7 +1024,7 @@ function drawerHtml(e) {
   evs.forEach(([w, f]) => { line += gap(last, w); last = w; line += f(); });
   if (s === "waiting") line += ev("now", when(e.next), "Back in the queue", "");
   const caps = sum(all.map(u => u[3] || 0));
-  const why2 = s === "stopped" ? (unreadable(e) ? "The farm cannot read its details, so nothing takes it: edit them to put it right, or remove it."
+  const why2 = s === "stopped" ? (unreadable(e) ? "The farm cannot read its details, so nothing takes it: edit them to put it right, or archive it."
       : "Its tries are spent, so it waits for a person: turn it on to try again, or mark it fixed once it has been mended.")
     : s === "waiting" ? "Refused, and back in the queue at " + when(e.next) + "; the queue reaches it after the addresses never tried."
     : s === "aside" ? "Set aside by hand: nothing takes it until it is turned on."
@@ -1406,11 +1409,11 @@ function onClick(ev) {
       if (!ev.detail) { const a = document.querySelector("#rows .addr"); if (a) a.focus({preventScroll: true}); }
       return; }
     if (how.startsWith("for:")) { flashFam = key; apply(how, new Set(f.ex.filter(canSwitch).map(e => e.id)), f.name); if (!ev.detail) refocus('[data-menu="' + CSS.escape("fam:" + key) + '"]'); return; }
-    const pick = how === "free" || how === "mend" ? isOut : how === "aside" ? inPlay : how === "remove" ? canSwitch
+    const pick = how === "free" || how === "mend" ? isOut : how === "aside" ? inPlay : how === "remove-all" ? canRemove
       : how === "remove-spent" ? (e => stateOf(e) === "spent") : () => true;
     if (how !== "copy") flashFam = key;
     if (how === "free" || how === "mend") litFam = key;
-    apply(how === "remove-spent" ? "remove" : how, new Set(f.ex.filter(pick).map(e => e.id)), f.name);
+    apply(how.startsWith("remove") ? "remove" : how, new Set(f.ex.filter(pick).map(e => e.id)), f.name);
     if (!ev.detail) refocus('[data-menu="' + CSS.escape("fam:" + key) + '"]');
     return;
   }
@@ -1735,11 +1738,11 @@ setInterval(() => {
   refocus(fk);
 }, 60000);
 
-/* The archive: every Gmail spent or removed, newest first, in a drawer of
+/* The archive: every Gmail spent or archived, newest first, in a drawer of
    its own, with a box to find one by its address or its batch. */
 const ARCH_WAS = r => r.was === "used" ? "spent" + (r.used ? " " + day(r.used) : "")
-  : r.was === "set_aside" ? "removed while set aside" : !r.was ? "removed while free"
-  : "removed after " + GLOW[gkey(r.was, false)] + " (" + rawWord(r.was) + ")";
+  : r.was === "set_aside" ? "archived while set aside" : !r.was ? "archived while free"
+  : "archived after " + GLOW[gkey(r.was, false)] + " (" + rawWord(r.was) + ")";
 function archLines(rows) {
   return rows.length ? rows.map((r, i) => '<div style="--i:' + i + '"><b>' + esc(r.a) + '</b><span class="t">' + esc(stamp(r.at)) + '</span><small>' +
     esc([famOf(r.f), ARCH_WAS(r), r.by && "by " + r.by].filter(Boolean).join(" \u00b7 ")) + '</small></div>').join("")
@@ -1763,8 +1766,8 @@ function openArchive(from, q, fam) {
     const head = !total ? (scope ? "Nothing of " + scope.name + " is in the archive." : "Nothing has been archived yet.")
       : q ? (!hits ? "Nothing in the archive matches that." : hits > rows.length ? "The newest " + rows.length + " of the " + hits + " that match"
         : hits === 1 ? "1 Gmail of " + total + " matches" : hits + " Gmails of " + total + " match")
-      : scope ? (rows.length < total ? "The newest " + rows.length + " of the " + total : "All " + total) + " Gmails of " + scope.name + ", newest first: spent on a phone, or removed by a person."
-      : (rows.length < total ? "The newest " + rows.length + " of " + total : "All " + total) + ", newest first: spent on a phone, or removed by a person.";
+      : scope ? (rows.length < total ? "The newest " + rows.length + " of the " + total : "All " + total) + " Gmails of " + scope.name + ", newest first: spent on a phone, or archived by a person."
+      : (rows.length < total ? "The newest " + rows.length + " of " + total : "All " + total) + ", newest first: spent on a phone, or archived by a person.";
     archFam = scope;
     const open = el("layer").querySelector(".draw[data-arch]");
     if (open) {

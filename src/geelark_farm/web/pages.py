@@ -4603,7 +4603,7 @@ _GMAILS_PAGE_SAID = {"gmails_aside": "Set {} aside",
                      "gmails_queue": "Put {} back in the queue",
                      "gmails_mend": "Mark {} fixed",
                      "gmails_keep_for": "Keep {}",
-                     "gmails_remove": "Remove {} to the archive"}
+                     "gmails_remove": "Archive {}"}
 
 #: A running row older than this shows a "stuck?" hint: no build takes
 #: twenty minutes, and the drain closes such rows after two budgets.
