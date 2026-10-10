@@ -1542,6 +1542,69 @@ def test_addresses_and_serials_come_out_in_the_same_order(settings,
         f"addresses")
 
 
+# -------------------------------------- the cloud refuses the exit at creation
+def _refusing_create(times):
+    """`phones.create` refusing the first `times` exits with [45004]."""
+    tried = []
+
+    def create(client, settings, proxy, **k):
+        tried.append(proxy.host)
+        if len(tried) <= times:
+            raise builder.phones.ProxyRefused(
+                'creation failed: {"details": [{"code": 45004, '
+                '"msg": "check proxy failed"}]}')
+
+        class Entry:
+            phone_id, serial = "P900", "900"
+        return Entry()
+    return create, tried
+
+
+def test_an_exit_the_cloud_will_not_create_behind_is_dead_and_the_next_one_tried(
+        settings, monkeypatch):
+    """[45004] check proxy failed is the exit's fault, not the phone's: it
+    went down as phone_would_not_start, counted against the breaker, and
+    five in a row stopped all building (2026-10-10)."""
+    book = make_book(gmails=1, proxies=3, apps=1)
+    create, tried = _refusing_create(1)
+    monkeypatch.setattr(builder.phones, "create", create)
+    monkeypatch.setattr(builder.phones, "ensure_running", lambda *a, **k: None)
+    monkeypatch.setattr(builder.phones, "stop", lambda *a, **k: None)
+    monkeypatch.setattr(builder.proxy_mod, "check",
+                        lambda *a, **k: {"outboundIP": "1.1.1.1"})
+    monkeypatch.setattr(builder.shell, "third_party_packages",
+                        lambda *a, **k: ["com.openai.chatgpt"])
+    monkeypatch.setattr(builder.play_install, "install", lambda *a, **k: INSTALLED)
+    monkeypatch.setattr(builder.google_login, "sign_in", lambda *a, **k: SIGNED_IN)
+    monkeypatch.setattr(builder.chatgpt_login, "sign_in", lambda *a, **k: SIGNED_IN)
+
+    build = builder.build_one(None, settings, book, FakeLedger(), 1)
+
+    assert build.serial == "900", build.status
+    assert len(tried) == 2 and tried[0] != tried[1], "a second exit was tried"
+    refused = [r for r in book.proxies._rows if r.proxy.host == tried[0]][0]
+    assert book.proxies.status_of(refused) == "dead"
+    assert "[45004]" in refused.values["Note"]
+
+
+def test_three_refused_exits_end_the_build_as_an_exit_problem(settings,
+                                                               monkeypatch):
+    """Not as a phone that would not start: the breaker counts that one."""
+    from geelark_farm import breaker
+
+    book = make_book(gmails=1, proxies=4, apps=1)
+    create, tried = _refusing_create(9)
+    monkeypatch.setattr(builder.phones, "create", create)
+    monkeypatch.setattr(builder.proxy_mod, "check",
+                        lambda *a, **k: {"outboundIP": "1.1.1.1"})
+
+    build = builder.build_one(None, settings, book, FakeLedger(), 1)
+
+    assert build.status == "no_working_proxy"
+    assert len(tried) == builder.PROXY_REFUSALS
+    assert not breaker.counts_against(build)
+
+
 # ------------------------------------------------- a renewed proxy comes back
 def test_a_dead_proxy_that_answers_again_goes_back_in_the_pool(monkeypatch):
     """These are rented and renewed on the same address, so one that stopped

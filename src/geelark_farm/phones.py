@@ -58,6 +58,21 @@ class PhoneCapacityError(PhoneError):
     """
 
 
+class ProxyRefused(PhoneError):
+    """GeeLark would not create a phone behind this proxy: [45004] check
+    proxy failed. Its own check at creation did not reach the proxy, a
+    moment after ours did - a flaky exit, not a phone that would not
+    start. It was filed as `phone_would_not_start` and counted against
+    the breaker as the device's fault: 29 builds on 10 Oct, and five in
+    a row stopped all building at 15:09 (2026-10-10). The build takes
+    another proxy instead; still a PhoneError for every other caller.
+    """
+
+
+#: GeeLark's refusal of a phone whose proxy its own check did not reach.
+PROXY_CHECK_FAILED = 45004
+
+
 class WaitInterrupted(PhoneError):
     """A wait on the phone was stopped because the run is shutting down.
 
@@ -293,7 +308,11 @@ def create(client: Client, settings: Settings, proxy: Proxy, *,
     created = [d for d in (data.get("details") or [])
                if d.get("code") == 0 and d.get("id")]
     if not created:
-        raise PhoneError("creation failed:\n" + json.dumps(data, indent=2))
+        said = "creation failed:\n" + json.dumps(data, indent=2)
+        if any(d.get("code") == PROXY_CHECK_FAILED
+               for d in (data.get("details") or [])):
+            raise ProxyRefused(said)
+        raise PhoneError(said)
 
     row = created[0]
     phone_id = row["id"]

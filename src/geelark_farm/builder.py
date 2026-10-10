@@ -273,6 +273,11 @@ PASS_TICK_SECONDS = 1.0
 #: phone that pass met one captcha or none (the operator, 2026-09-08).
 CAPTCHAS_PER_EXIT = 2
 
+#: How many exits one build tries when the cloud will not create a phone
+#: behind them ([45004] check proxy failed) before it ends as an exit
+#: problem - each one is marked dead, so the pool is the real bound.
+PROXY_REFUSALS = 3
+
 # What the Phones tab records. The build knows exactly why it stopped and says
 # so in the note; the Status column answers the only question asked of it at a
 # glance - can I use this phone. The words are the Phones tab's own
@@ -1373,13 +1378,36 @@ def _acquire(st: _BuildState) -> Build | None:
                 avoid_host=str((getattr(st.gmail_row, "values", None) or {})
                                .get("Last Host") or ""),
                 purpose=st.purpose)
-        st.build.proxy = str(st.proxy_row.proxy)
-        st.build.proxy_name = st.proxy_row.name
-        st.lease.current = st.proxy_row
-
-        entry = _create_kept(st.client, st.settings, st.ledger, st.proxy_row.proxy,
-                             label=f"build {st.index}",
-                             account=st.gmail_row.label if st.gmail_row else "")
+        refused = 0
+        while True:
+            st.build.proxy = str(st.proxy_row.proxy)
+            st.build.proxy_name = st.proxy_row.name
+            st.lease.current = st.proxy_row
+            try:
+                entry = _create_kept(st.client, st.settings, st.ledger,
+                                     st.proxy_row.proxy, label=f"build {st.index}",
+                                     account=st.gmail_row.label if st.gmail_row else "")
+                break
+            except phones.ProxyRefused as exc:
+                # The cloud's own check did not reach this exit: the
+                # exit's fault, never the phone's, so it is marked dead
+                # and the next one tried. A person's chosen exit, or a
+                # third refusal, ends the build as an exit problem, which
+                # the breaker does not count (2026-10-10).
+                refused += 1
+                log.warning("the cloud would not create a phone behind "
+                            "proxy %s ([45004] check proxy failed)",
+                            st.proxy_row.name or "?")
+                st.book.proxies.fail(st.proxy_row, "dead", note=(
+                    "The cloud would not create a phone behind it: its own "
+                    "check of the proxy failed [45004]."))
+                if chosen_exit or refused >= PROXY_REFUSALS:
+                    raise Aborted("no_working_proxy") from exc
+                st.proxy_row = kit_exits._fresh_proxy(
+                    st.client, st.book, settings=st.settings,
+                    avoid_host=str((getattr(st.gmail_row, "values", None) or {})
+                                   .get("Last Host") or ""),
+                    purpose=st.purpose)
     st.phone_id = entry.phone_id
     st.build.phone_id = st.phone_id
     st.build.serial = str(entry.serial or "")
