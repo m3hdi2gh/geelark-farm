@@ -713,15 +713,33 @@ function doors(e) {
   const open = menu === e.id + ":more";
   return '<span class="doors"><button type="button" class="more' + (open ? " on" : "") + '" data-menu="' + e.id + ':more" aria-haspopup="menu" aria-expanded="' + open + '" aria-label="More for ' + esc(e.a) + '">' + SVG(ICON.more, 2) + '</button></span>';
 }
+/* The list draws its first hundred rows, and the next hundred each time
+   the reader nears its end (or presses the line that says how many are
+   left). A thousand rows of a dozen parts each made every redraw - and
+   every frame of the rail folding - lay out forty thousand nodes. A new
+   filter, search or sort starts again at the top; the pool's own changes
+   keep as many as were drawn. What the list's tools do - select every
+   row, a batch's menu, the counts - is done on all the rows that match,
+   drawn or not. */
+const PAGE_ROWS = 100;
+let rowLimit = PAGE_ROWS, rowView = "", moreSeen = null;
+/* The ids drawn now, for the selection bar's "further down". */
+let drawnIds = new Set();
 function renderRows() {
   const rows = shown();
-  el("rows").innerHTML = rows.length ? rows.map(e =>
+  const sig = JSON.stringify([view.range, view.scope, view.flag, view.fam, view.q, view.sort, view.dir, view.gk, view.vk, view.prod]);
+  if (sig !== rowView) { rowView = sig; rowLimit = PAGE_ROWS; }
+  const drawn = rows.slice(0, rowLimit), left = rows.length - drawn.length;
+  drawnIds = new Set(drawn.map(e => e.id));
+  el("rows").innerHTML = rows.length ? drawn.map(e =>
     '<tr data-id="' + e.id + '" class="' + (ticked.has(e.id) ? "ticked " : "") + (flashIds.has(e.id) ? "flash" : "") + '">' +
     '<td class="tk"><button class="box' + (ticked.has(e.id) ? " on" : "") + '" type="button" role="checkbox" aria-checked="' + ticked.has(e.id) + '" data-tick="' + e.id + '" aria-label="Select ' + esc(e.a) + '">' + SVG(ICON.tick, 3.4) + '</button></td>' +
     '<td><span class="g1"><span class="addr" data-open="' + e.id + '" role="button" tabindex="0" title="Open its story">' + esc(e.a) + '</span>' +
       '<small>' + esc(famOf(e.sell) || "no seller") + bought(e) + (keptFor(e) ? ' \u00b7 <b class="kept-w k-' + keptFor(e) + '">kept for ' + PW[keptFor(e)] + '</b>' : '') +
       (e.key ? '' : e.rec ? ' \u00b7 recovery address only' : ' \u00b7 <em>no second factor</em>') + '</small></span></td>' +
-    '<td>' + stateCell(e) + '</td><td>' + phoneCell(e) + '</td><td>' + googleCell(e) + '</td><td>' + pressCell(e) + '</td><td>' + doors(e) + '</td></tr>').join("")
+    '<td>' + stateCell(e) + '</td><td>' + phoneCell(e) + '</td><td>' + googleCell(e) + '</td><td>' + pressCell(e) + '</td><td>' + doors(e) + '</td></tr>').join("") +
+    (left ? '<tr class="more-row"><td colspan="7"><button class="link" type="button" data-more="1">Show ' + Math.min(left, PAGE_ROWS) + ' more</button><small>' +
+      left + ' of the ' + rows.length + ' not drawn yet \u00b7 they come as you scroll</small></td></tr>' : '')
     : '<tr class="none-row"><td colspan="7">' + SVG(ICON.mail, 1.5) + '<b>No Gmail matches that.</b>' + (narrowed() ? '<button class="link" type="button" data-clear="all">Clear the filters</button>' : '') + '</td></tr>';
   flashIds.clear();
   el("count").textContent = narrowed() ? rows.length + " of " + GM.length : String(GM.length);
@@ -730,6 +748,19 @@ function renderRows() {
   const every = rows.length > 0 && rows.every(e => ticked.has(e.id)), some = rows.some(e => ticked.has(e.id));
   el("all").classList.toggle("on", every);
   el("all").setAttribute("aria-checked", every ? "true" : some ? "mixed" : "false");
+  // The next rows come before the reader reaches the end of these.
+  const more = el("rows").querySelector(".more-row");
+  if (moreSeen) moreSeen.disconnect();
+  if (more && "IntersectionObserver" in window) {
+    moreSeen = moreSeen || new IntersectionObserver(seen => {
+      if (!seen.some(x => x.isIntersecting)) return;
+      moreSeen.disconnect();
+      rowLimit += PAGE_ROWS;
+      renderRows();
+      if (ticked.size) renderSel();
+    }, {rootMargin: "0px 0px 900px 0px"});
+    moreSeen.observe(more);
+  }
   document.querySelectorAll("thead th.sortable").forEach(th => {
     const on = th.dataset.sort === view.sort;
     th.classList.toggle("up", on && view.dir === 1);
@@ -785,7 +816,10 @@ function renderSel() {
   // The switch speaks for the ticked Gmails it can move.
   const swc = can.filter(e => !unreadable(e)), on = swc.filter(inPlay).length;
   const st = !swc.length ? "" : on === swc.length ? "true" : on ? "mixed" : "false";
-  const inner = '<b>' + ticked.size + ' selected' + (hid ? '<small>' + hid + ' not shown</small>' : '') + '</b>' +
+  // Ticked by "every row" but not drawn yet: further down the list.
+  const below = sel.filter(e => passes(e) && !drawnIds.has(e.id)).length;
+  const inner = '<b>' + ticked.size + ' selected' + (hid ? '<small>' + hid + ' not shown</small>' : '') +
+    (below ? '<small class="dn">' + below + ' further down the list</small>' : '') + '</b>' +
     (swc.length ? '<span class="sws"><button class="sw" type="button" role="checkbox" aria-checked="' + st + '" data-bulk="' + (st === "true" ? "aside" : "free") + '" data-keep="1" aria-label="The ticked Gmails in the queue"><i></i></button>' +
       '<span>In the queue<small class="tab">' + on + ' of ' + swc.length + '</small></span></span>' : '') +
     (sel.some(canMend) ? '<button class="act" type="button" data-bulk="mend">' + SVG(ICON.fix, 2) + 'Mark as fixed</button>' : '') +
@@ -1341,7 +1375,7 @@ function closeMenu(back) {
   menuFrom = null;
 }
 const FOCUS_KEYS = ["data-seg", "data-k", "data-tick", "data-psw", "data-bsw", "data-keep", "data-menu", "data-fam", "data-open", "data-clear", "data-scope", "data-key", "data-prod", "data-defs", "data-flag", "data-pick",
-  "data-bulk", "data-old", "data-what", "data-do", "data-arcf", "data-archall"];
+  "data-bulk", "data-old", "data-what", "data-do", "data-arcf", "data-archall", "data-more"];
 // A batch's key is typed by hand: escaped, so no seller's name breaks a selector.
 const focusKey = a => !a || a === document.body || !a.hasAttribute ? "" : FOCUS_KEYS.map(k => a.hasAttribute(k) ? "[" + k + '="' + CSS.escape(a.getAttribute(k)) + '"]' : "").join("");
 function refocus(key) {
@@ -1459,6 +1493,7 @@ function onClick(ev) {
   const af = t.closest("[data-arcf]");
   if (af) { const f = famList().find(x => x.key === af.dataset.arcf); if (f) openArchive(af, "", {name: f.name, sellers: famSellers(f.key)}); return; }
   if (t.closest("[data-archall]")) { const q = el("arq"); openArchive(null, q ? q.value.trim() : "", null); return; }
+  if (t.closest("[data-more]")) { rowLimit += PAGE_ROWS; renderRows(); if (ticked.size) renderSel(); if (!ev.detail) refocus('[data-more="1"]'); return; }
   const fc = t.closest("[data-fam]");
   if (fc) { view.fam = view.fam === fc.dataset.fam ? "" : fc.dataset.fam; renderFams(); renderList(); if (view.fam) toList(); return; }
   const bk = t.closest("[data-bulk]");
