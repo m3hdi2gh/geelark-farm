@@ -38,9 +38,11 @@ somebody waiting at the end of it.
 from __future__ import annotations
 
 import _thread
+import faulthandler
 import functools
 import logging
 import os
+import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -1401,14 +1403,26 @@ def beat(settings: Settings) -> None:
         log.warning("could not touch the heartbeat (%s)", exc)
 
 
+#: How long a keeper's pass may take before it counts as hung. A keeper
+#: builds nothing itself - its builds are queued for the builder
+#: containers - so its passes are a few bounded calls, never a build. The
+#: build-sized limit it used to share let one hung call to the cloud stop
+#: all ordering for an hour: 10 Oct 2026, 17:29 to past 18:20, nothing
+#: built and no error said, until the keeper was restarted by hand.
+KEEPER_STALE_SECONDS = 15 * 60
+
+
 def stale_after(settings: Settings) -> float:
     """How long without a pass means something is wrong.
 
     Derived rather than configured, because the honest answer follows from
     two numbers that are already set. A pass that is building legitimately
     takes as long as a build is allowed to, and then the next one waits out
-    the interval; anything past both, twice over, is not a slow pass.
+    the interval; anything past both, twice over, is not a slow pass. A
+    keeper's pass builds nothing, so it gets KEEPER_STALE_SECONDS.
     """
+    if getattr(settings, "role", "all") == "keeper":
+        return float(KEEPER_STALE_SECONDS)
     return 2 * (settings.build_budget_seconds + settings.serve_interval_seconds)
 
 
@@ -1634,6 +1648,17 @@ def _show(book: Book, settings: Settings, decision: Decision, *, warm: int,
 GIVE_UP_GRACE = 60.0
 
 
+def _dump_threads() -> None:
+    """Every thread's stack, into the log, before a hung pass is ended: the
+    hang of 10 Oct 2026 left only a thread waiting on a socket to go by.
+    Never fatal."""
+    try:
+        sys.stderr.flush()
+        faulthandler.dump_traceback(file=sys.stderr, all_threads=True)
+    except Exception as exc:                                      # noqa: BLE001
+        log.warning("the threads' stacks were not written (%s)", exc)
+
+
 class Watchdog:
     """End the process when a pass stops coming back.
 
@@ -1702,6 +1727,7 @@ class Watchdog:
                 log.error("this pass has been running %.0f minutes, past the "
                           "%.0f it should ever take - stopping the service so "
                           "it can be restarted", age / 60, self.limit / 60)
+                _dump_threads()
                 _thread.interrupt_main()
             elif what == "exit":
                 log.critical("the pass did not answer the interrupt - ending "

@@ -9,6 +9,7 @@ each of the three things it is careful about costs money to get wrong.
 from __future__ import annotations
 
 import threading
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -1173,6 +1174,41 @@ def test_the_watchdog_and_the_healthcheck_use_one_number(make_settings,
     guard = serve_mod.Watchdog(serve_mod.stale_after(settings))
 
     assert guard.limit == serve_mod.stale_after(settings)
+
+
+def test_a_keepers_pass_is_hung_after_a_quarter_of_an_hour_not_an_hour(
+        make_settings, tmp_path):
+    """A keeper builds nothing itself, so the build-sized limit let one hung
+    call stop all ordering for an hour (2026-10-10). The healthcheck reads
+    the same number."""
+    keeper = make_settings(state_dir=tmp_path, role="keeper")
+    everything = make_settings(state_dir=tmp_path)
+
+    assert serve_mod.stale_after(keeper) == 15 * 60
+    assert serve_mod.stale_after(everything) == 2 * (
+        everything.build_budget_seconds + everything.serve_interval_seconds)
+    old = time.time() - 16 * 60
+    (tmp_path / serve_mod.HEARTBEAT_FILE).write_text(str(old), encoding="utf-8")
+    ok, said = serve_mod.healthy(keeper)
+    assert not ok and "past the 15" in said
+
+
+def test_a_hung_pass_has_every_threads_stack_written_before_it_is_ended(
+        monkeypatch):
+    dumped = []
+    monkeypatch.setattr(serve_mod.faulthandler, "dump_traceback",
+                        lambda **k: dumped.append(k))
+    monkeypatch.setattr(serve_mod._thread, "interrupt_main", lambda: None)
+    guard = serve_mod.Watchdog(limit=0.01)
+    guard.began()
+    time.sleep(0.05)
+    runner = threading.Thread(target=guard.watch, kwargs={"every": 0.01},
+                              daemon=True)
+    runner.start()
+    time.sleep(0.2)
+    guard.stop()
+    runner.join(1)
+    assert dumped and dumped[0]["all_threads"] is True
 
 
 def test_a_pass_that_began_is_timed_and_one_that_ended_is_not():
