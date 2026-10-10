@@ -3876,6 +3876,7 @@ class _Handler(BaseHTTPRequestHandler):
         self._began = time.perf_counter()
         self._sent = 0
         self._code = "-"
+        self._cache_said = False
         super().handle_one_request()
         self._say_request()
 
@@ -3886,7 +3887,21 @@ class _Handler(BaseHTTPRequestHandler):
         # server sends.
         if keyword.lower() == "content-length" and str(value).isdigit():
             self._sent = int(value)
+        if keyword.lower() == "cache-control":
+            value = _no_transform(value)
+            self._cache_said = True
         super().send_header(keyword, value)
+
+    def end_headers(self) -> None:
+        # Every answer says no-transform, so the edge in front of the site
+        # leaves its bytes alone. Cloudflare's email obfuscation rewrote
+        # every address on the page to "[email protected]" with a link to
+        # its own explainer, and a row the live layer swapped in never ran
+        # the decoder at all (2026-10-10).
+        if not getattr(self, "_cache_said", False):
+            super().send_header("Cache-Control", "no-transform")
+        self._cache_said = False
+        super().end_headers()
 
     def log_request(self, code="-", size="-") -> None:
         """Kept, not written.
@@ -4125,6 +4140,14 @@ def _gmail_back(field: dict) -> str:
 
 def _proxy_back(field: dict) -> str:
     return _back_to(field, "/pools/proxy")
+
+
+def _no_transform(value: str) -> str:
+    """A Cache-Control value with no-transform in it, said once."""
+    said = [part.strip() for part in str(value).split(",") if part.strip()]
+    if "no-transform" not in (part.lower() for part in said):
+        said.append("no-transform")
+    return ", ".join(said)
 
 
 def _said_url(back: str, said: str) -> str:

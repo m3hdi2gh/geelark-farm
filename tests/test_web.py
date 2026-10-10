@@ -3128,7 +3128,38 @@ def test_no_page_or_export_may_be_cached(web, monkeypatch):
     for path in ("/", "/pools/gpt/delivered.csv"):
         status, headers, _ = client.request("GET", path)
         assert status == 200
-        assert dict(headers)["Cache-Control"] == "no-store", path
+        assert dict(headers)["Cache-Control"] == "no-store, no-transform", \
+            path
+
+
+def test_no_answer_may_be_rewritten_by_the_edge_in_front_of_the_site(
+        web, monkeypatch):
+    """Cloudflare turned every Gmail on the dashboard into "[email
+    protected]" (2026-10-10). no-transform on every answer - those that
+    say nothing about caching, those that do, and a refusal - and once."""
+    monkeypatch.setattr(app_mod.read, "delivered_rows", lambda s, q="": [])
+    client = web()
+    status, headers, _ = client.request("GET", "/login")
+    said = [v for k, v in headers if k.lower() == "cache-control"]
+    assert status == 200 and len(said) == 1 and "no-transform" in said[0]
+    status, headers, _ = client.request("GET", "/no/such/page")
+    said = [v for k, v in headers if k.lower() == "cache-control"]
+    assert len(said) == 1 and "no-transform" in said[0], status
+    client.login()
+    for path in ("/", "/pools/gpt/delivered.csv", "/no/such/page"):
+        _, headers, _ = client.request("GET", path)
+        said = [v for k, v in headers if k.lower() == "cache-control"]
+        assert len(said) == 1, path
+        assert said[0].count("no-transform") == 1, path
+
+
+def test_no_transform_is_added_once_and_keeps_what_was_said():
+    assert app_mod._no_transform("no-store") == "no-store, no-transform"
+    assert app_mod._no_transform("private, max-age=60") == \
+        "private, max-age=60, no-transform"
+    assert app_mod._no_transform("no-store, No-Transform") == \
+        "no-store, No-Transform"
+    assert app_mod._no_transform("") == "no-transform"
 
 
 def test_a_day_that_is_not_a_date_is_said_so(caplog):

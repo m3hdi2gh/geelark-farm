@@ -82,7 +82,7 @@ def test_a_request_without_a_key_is_refused_and_says_how(web, monkeypatch):  # n
     assert status == 401 and body["error"]["code"] == "unauthorized"
     assert headers["WWW-Authenticate"].startswith("Bearer ")
     assert headers["Content-Type"].startswith("application/json")
-    assert headers["Cache-Control"] == "no-store"
+    assert headers["Cache-Control"] == "no-store, no-transform"
     assert headers["X-Content-Type-Options"] == "nosniff"
 
 

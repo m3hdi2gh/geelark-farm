@@ -305,7 +305,7 @@ def test_the_state_answers_json_no_store_and_a_304_for_its_etag(web, desk):
     status, hdrs, body = _get(client, "/station/state", headers=PAGE)
     assert status == 200
     assert hdrs["Content-Type"] == "application/json; charset=utf-8"
-    assert hdrs["Cache-Control"] == "no-store"
+    assert hdrs["Cache-Control"] == "no-store, no-transform"
     assert hdrs["X-Content-Type-Options"] == "nosniff"
     tag = hdrs["ETag"]
     assert re.fullmatch(r'W/"[0-9a-f]{16}"', tag)
@@ -1271,7 +1271,7 @@ def test_the_live_tab_page_and_state_are_the_holders_and_say_released_to_anyone_
     status, hdrs, body = _get(client, "/station/phones/1500/state",
                               headers=LIVE)
     got = json.loads(body)
-    assert status == 200 and hdrs["Cache-Control"] == "no-store"
+    assert status == 200 and hdrs["Cache-Control"] == "no-store, no-transform"
     assert got["conn"] == "on" and got["url"] == "https://view.example/p"
     assert got["pw"] == "gpw" and got["acct"]["address"] == "m@x.com"
     status, _, body = _get(client, "/station/phones/1500")
