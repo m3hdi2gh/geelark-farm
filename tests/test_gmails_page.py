@@ -763,6 +763,83 @@ def test_a_details_check_says_what_is_wrong_in_the_pages_words():
             check(*args)
 
 
+# ------------------------------------------------------------- the paste
+#: Lines as sellers' sheets hand them over, and the ways they go wrong. A
+#: password here carries the characters real ones do.
+_PASTE = [
+    "a1@gmail.com\tPw:72&93$#\tJBSWY3DPEHPK3PXP",
+    "a2@gmail.com\tp;w|d,1\trec@outlook.com",
+    "a3@gmail.com\tmy pass word\tjbsw y3dp ehpk 3pxp",
+    "Pw-first-4\ta4@gmail.com\tJBSWY3DPEHPK3PXP",
+    "a5@gmail.com\trec5@outlook.com\tPw-5",
+    "17\ta6@gmail.com\tPw-6\tJBSWY3DPEHPK3PXP",
+    "a7@gmail.com\tPw-7\tJBSWY3DPEHPK3PXP\tsold 2 Oct",
+    "a8@gmail.com Pw-8 jbsw y3dp ehpk 3pxp",
+    "a9@gmail.com,Pw-9,rec9@outlook.com",
+    "a10@gmail.com\tA@123456789.b",
+    "a11@gmail.com\tchaobuoisangvuive\tJBSWY3DPEHPK3PXP",
+    "a12@gmail.com\tJBSWY3DPEHPK3PXP",
+    "a13@gmail.com",
+    "no address here\tPw",
+    "a14@gmail.com\t123456789012345678",
+    "  a15@gmail.com   Pw-15   ",
+]
+
+
+def _read_in_the_page(lines):
+    import pathlib
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is not installed")
+    js = pathlib.Path(assets.__file__).with_name("static").joinpath("gmails.js").read_text(
+        encoding="utf-8")
+    reader = js[js.index("/* reader:start"):js.index("/* reader:end */")]
+    script = reader + "\nprocess.stdout.write(JSON.stringify(JSON.parse(process.argv[1]).map(parseLine)));"
+    done = subprocess.run([node, "-e", script, json.dumps(lines)], capture_output=True,
+                          text=True, timeout=60, check=True)
+    return json.loads(done.stdout)
+
+
+def test_the_page_reads_a_paste_as_the_dashboard_does():
+    """Every line is read by both readers to the same address, password,
+    key, recovery address and pieces left over - the page's reader is the
+    dashboard's, so a batch the dashboard takes is taken here."""
+    from geelark_farm.web import paste
+
+    page = _read_in_the_page(_PASTE)
+    for line, mine, theirs in zip(_PASTE, page, paste.accounts("\n".join(_PASTE)), strict=True):
+        if not theirs["address"]:
+            assert mine is None, line
+            continue
+        wanted = {"address": theirs["address"].lower(), "pass": theirs["password"],
+                  "key": theirs["secret"], "rec": theirs["recovery"].lower(),
+                  "odd": theirs["unread"]}
+        got = {k: mine[k] for k in wanted}
+        assert got == wanted, line
+        assert bool(mine["error"]) == ("could not tell" in str(theirs.get("error") or "")), line
+    # What the sellers send, read as they mean it.
+    by = {line: x for line, x in zip(_PASTE, page)}
+    assert by[_PASTE[0]]["pass"] == "Pw:72&93$#" and by[_PASTE[0]]["key"] == "JBSWY3DPEHPK3PXP"
+    assert by[_PASTE[1]]["pass"] == "p;w|d,1" and by[_PASTE[1]]["rec"] == "rec@outlook.com"
+    assert by[_PASTE[3]]["pass"] == "Pw-first-4", "the password before the address"
+    assert by[_PASTE[6]]["odd"] == ["sold 2 Oct"], "a piece it cannot place is said"
+
+
+def test_the_page_also_reads_a_sellers_colons_dashes_and_both_factors():
+    page = _read_in_the_page([
+        "name@gmail.com:Pw-5512:LM4TQ6BHX2YKNZ3W",
+        "b2@gmail.com|Pw-2|rec2@outlook.com",
+        "b3@gmail.com\tPw-3\tJBSW-Y3DP-EHPK-3PXP",
+        "b4@gmail.com\tPw-4\tJBSWY3DPEHPK3PXP\trec4@outlook.com"])
+    assert [(x["address"], x["pass"], x["key"], x["rec"], x["odd"]) for x in page] == [
+        ("name@gmail.com", "Pw-5512", "LM4TQ6BHX2YKNZ3W", "", []),
+        ("b2@gmail.com", "Pw-2", "", "rec2@outlook.com", []),
+        ("b3@gmail.com", "Pw-3", "JBSWY3DPEHPK3PXP", "", []),
+        ("b4@gmail.com", "Pw-4", "JBSWY3DPEHPK3PXP", "rec4@outlook.com", [])]
+    assert page[3]["second"] == "key and recovery"
+
+
 # --------------------------------------------------------------- the assets
 def test_the_gmails_pair_is_served_and_the_script_parses(tmp_path):
     assert assets.served(assets.GMAILS_CSS_PATH) == (

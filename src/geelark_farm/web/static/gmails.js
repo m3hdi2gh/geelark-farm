@@ -1185,33 +1185,66 @@ function saveEdit(fixed) {
 }
 
 /* ---------------------------------------------------------- add Gmails */
+/* reader:start - the dashboard's paste reader (web/paste.py, `accounts`),
+   rule for rule, so a batch the dashboard reads this page reads the same
+   way: lines it took were left out here, because this reader split every
+   line on spaces, commas, colons, semicolons and bars at once - a
+   password with any of them came apart - and took the field after the
+   address for the password (2026-10-11). A test runs both readers over
+   the same lines. A line splits on tabs (a sheet's copy), else commas,
+   else spaces; the address is the piece with an @, the key the last piece
+   shaped like base32 (or four or more spaced groups of four), a second
+   address the recovery one, and the password the first piece left -
+   wherever each sits. What this page adds: a line with no tab, comma or
+   space splits on a seller's colons, bars or semicolons; a key may come
+   in dashed groups; and a line may carry a key and a recovery address
+   both, since a Gmail here keeps both. */
 const KEYISH = /^[A-Z2-7]{16,}$/i, GROUP = /^[A-Z2-7]{4}$/i;
 const isMail = p => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(p);
-const bare = p => p.replace(/-/g, "").toUpperCase();
-function parseLine(line) {
-  const parts = line.split(/[\s,;:|]+/).filter(Boolean), at = parts.findIndex(isMail);
-  if (at < 0) return null;
-  const address = parts[at].toLowerCase(), rest = parts.slice(at + 1), f = rest[0] || "";
-  let run = 0;
-  while (run < rest.length && GROUP.test(rest[run])) run++;
-  const keyHere = run === 4 || run === 8 || (KEYISH.test(bare(f)) && bare(f).length >= 26 && !rest.slice(1).some(p => KEYISH.test(bare(p)) || GROUP.test(p)));
-  const pass = f && !keyHere && !(isMail(f) && rest.length === 1) ? rest.shift() : "";
-  const groups = rest.filter(p => GROUP.test(p)), grouped = groups.length >= 4;
-  let key = grouped ? groups.join("").toUpperCase() : "", rec = "";
-  const odd = rest.filter(p => {
-    if (grouped && GROUP.test(p)) return false;
-    if (!key && KEYISH.test(bare(p))) { key = bare(p); return false; }
-    if (!rec && isMail(p) && p.toLowerCase() !== address) { rec = p.toLowerCase(); return false; }
-    return true;
-  });
-  return {address, pass, key, rec, odd, second: key ? "key" : rec ? "recovery" : ""};
+const B32 = /^[A-Za-z2-7 ]{16,}$/, DASHED = /^[A-Za-z2-7]{4}(?:-[A-Za-z2-7]{4}){3,}$/;
+function splitLine(line) {
+  const s = line.trim();
+  const parts = s.includes("\t") ? s.split("\t") : s.includes(",") ? s.split(",") : /\s/.test(s) ? s.split(/\s+/) : s.split(/[:|;]/);
+  return parts.map(p => p.trim()).filter(Boolean);
 }
+function regroup(tokens) {
+  let best = 0, at = -1, run = 0;
+  tokens.concat([""]).forEach((t, i) => {
+    if (GROUP.test(t)) { run++; return; }
+    if (run > best) { best = run; at = i - run; }
+    run = 0;
+  });
+  if (best < 4) return ["", tokens.slice()];
+  return [tokens.slice(at, at + best).join("").toUpperCase(), tokens.slice(0, at).concat(tokens.slice(at + best))];
+}
+function parseLine(line) {
+  const parts = splitLine(line).map(p => DASHED.test(p) ? p.replace(/-/g, "") : p);
+  const emails = parts.filter(isMail);
+  let rest = parts.filter(p => !emails.includes(p));
+  // The last base32-shaped piece: a password of sixteen plain letters is
+  // base32-shaped too, and a seller's line puts the key after it.
+  const keys = rest.filter(p => B32.test(p) && !/^\d+$/.test(p));
+  let secret = keys.length ? keys[keys.length - 1] : "";
+  rest = rest.filter(p => p !== secret);
+  if (!secret) [secret, rest] = regroup(rest);
+  let pass = rest[0] || "";
+  // A password can be shaped like an address: with nothing else left for
+  // it, the second address is the password.
+  if (!pass && emails.length > 1) pass = emails.splice(1, 1)[0];
+  if (!emails.length) return null;
+  let key = secret.replace(/ /g, "").toUpperCase(), error = "";
+  if (key && !pass) { pass = key; key = ""; error = "has a password the farm cannot tell from its 2fa key: put them in separate columns"; }
+  const address = emails[0].toLowerCase(), rec = (emails[1] || "").toLowerCase();
+  return {address, pass, key, rec, odd: rest.slice(1).concat(emails.slice(2)), error,
+    second: key && rec ? "key and recovery" : key ? "key" : rec ? "recovery" : ""};
+}
+/* reader:end */
 function draftRows() {
   const seen = new Map(), pool = new Map(GM.map(e => [e.a.toLowerCase(), e]));
   return el("paste").value.split(/\r?\n/).map((l, i) => ({raw: l.trim(), line: i + 1})).filter(r => r.raw).map(r => {
     const x = parseLine(r.raw), had = x && pool.get(x.address), back = had && canMend(had) ? had : null;
-    const why = !x ? "has no address in it" : !x.pass ? "has no password"
-      : x.odd.length ? "has a field it cannot place: out of order, or a space or a comma in the password?"
+    const why = !x ? "has no address in it" : !x.pass ? "has no password" : x.error ? x.error
+      : x.odd.length ? "has " + (x.odd.length === 1 ? "a piece" : x.odd.length + " pieces") + " it cannot place: " + x.odd.slice(0, 2).join(", ") + (x.odd.length > 2 ? ", \u2026" : "")
       : had && !back ? (stateOf(had) === "spent" ? "is spent" : stateOf(had) === "phone" ? "is on a phone"
         : unreadable(had) ? "has details the farm cannot read; edit it in its row" : "is in the queue already; edit it in its row")
       : seen.has(x.address) ? "repeats line " + seen.get(x.address) : "";
@@ -1258,7 +1291,8 @@ function renderRead() {
   box.innerHTML = !rows.length ? "" : '<span class="rh"><b class="ok">' + good.length + ' read</b>' + (bad ? '<b class="bad">' + bad + ' left out</b>' : '') +
     (fresh.length && !b.seller ? '<span class="need">Name the seller to file ' + (back ? 'the new ones' : 'them') + '</span>'
       : to || backTo ? '<span class="to">' + [to, backTo].filter(Boolean).join(" \u00b7 ") + '</span>' : '') + '</span><ul>' +
-    rows.slice(0, SHOW).map(r => r.back
+    // The lines left out first: they are the ones that need the person.
+    rows.filter(r => !r.x).concat(rows.filter(r => r.x)).slice(0, SHOW).map(r => r.back
       ? '<li class="ok back">' + SVG(ICON.back, 2.6) + '<span class="hp">' + esc(r.x.address) + '</span><span class="u">back fixed \u00b7 ' + backShort(r.x) + '</span></li>'
       : r.x ? '<li class="ok">' + SVG(ICON.tick, 3) + '<span class="hp">' + esc(r.x.address) + '</span><span class="u">' + (r.x.second || "no second factor") + '</span></li>'
       : '<li class="bad">' + SVG(ICON.cross, 3) + '<span class="hp">' + esc(r.raw.slice(0, 48)) + '</span><span class="u">line ' + r.line + ' ' + r.why + '</span></li>').join("") +
