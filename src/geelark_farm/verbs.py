@@ -15,6 +15,7 @@ else does - a box that never opted in never runs a line of this.
 from __future__ import annotations
 
 import contextlib
+import datetime
 import logging
 import re
 import time
@@ -709,11 +710,14 @@ def add_proxies(book, ledger, settings, payload, client):
     # A batch from the Proxies page (2026-10-02): every proxy is named
     # Seller-Type-DDMon-n here, at run time, so two pastes of one batch
     # queued together still get numbers apart; and each carries the
-    # daily cap the page chose.
+    # daily cap and the end date the page chose.
     prefix = _batch_prefix(payload.get("batch"))
     if payload.get("batch") is not None and not prefix:
         return "refused", "a batch needs its seller, in letters or digits", None
     cap = _cap_of(payload) if prefix else 0
+    ends, wrong = _ends_of(payload) if prefix else ("", "")
+    if wrong:
+        return "refused", f"{wrong} - nothing was added", None
     dead: list[str] = []
     lane = purposes.normal(payload.get("purpose"))
     with contextlib.ExitStack() as held:
@@ -725,7 +729,7 @@ def add_proxies(book, ledger, settings, payload, client):
             except Exception as exc:                              # noqa: BLE001
                 return ("failed", f"the batch could not be numbered ({exc}); "
                                   f"nothing was added", None)
-        _join_proxies(book, payload, client, probes, names, lane, cap,
+        _join_proxies(book, payload, client, probes, names, lane, cap, ends,
                       added, skipped, dead)
     status, said, detail = _summary("proxy", added, skipped, refused,
                                     settings, _by(payload))
@@ -737,7 +741,7 @@ def add_proxies(book, ledger, settings, payload, client):
     return status, said, detail
 
 
-def _join_proxies(book, payload, client, probes, names, lane, cap,
+def _join_proxies(book, payload, client, probes, names, lane, cap, ends,
                   added, skipped, dead) -> None:
     """Test the probes at once, then add them in the order pasted."""
     answers = _test_many(client, probes) if client is not None else {}
@@ -758,7 +762,8 @@ def _join_proxies(book, payload, client, probes, names, lane, cap,
                 # The lane it is kept for, when the paste said one; a
                 # pool that predates lanes has no column to put it in.
                 **({"Purpose": lane} if lane else {}),
-                **({"Uses per day": str(cap)} if cap else {})})
+                **({"Uses per day": str(cap)} if cap else {}),
+                **({"Ends on": ends} if ends else {})})
         except ValueError:                 # see add_gmails
             skipped.append(f"{checked['host']}:{checked['port']}")
             continue
@@ -813,6 +818,36 @@ def _cap_of(payload: dict) -> int:
         return min(99, max(0, int(str(payload.get("cap") or 0).strip() or 0)))
     except ValueError:
         return 0
+
+
+_DAY = re.compile(r"\d{4}-\d{2}-\d{2}")
+_MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep",
+           "Oct", "Nov", "Dec")
+
+
+def _ends_of(payload: dict) -> tuple[str, str]:
+    """An end date from a press, as ("YYYY-MM-DD" or "" for none, why it
+    is not a day or ""). Only a real calendar day in this century is one:
+    the page's calendar sends nothing else, and a date column refuses the
+    rest with an error nobody would read."""
+    said = str(payload.get("ends") or "").strip()
+    if not said:
+        return "", ""
+    wrong = "", f"{said!r} is not a day"
+    if not _DAY.fullmatch(said):
+        return wrong
+    try:
+        day = datetime.date.fromisoformat(said)
+    except ValueError:
+        return wrong                       # 2026-02-30: the shape, not a day
+    if not 2000 <= day.year <= 2099:
+        return wrong
+    return day.isoformat(), ""
+
+
+def _day_word(iso: str) -> str:
+    """"2026-11-10" as "10 Nov 2026", the page's way of writing a day."""
+    return f"{int(iso[8:10])} {_MONTHS[int(iso[5:7]) - 1]} {iso[:4]}"
 
 
 def adopt_proxy(book, ledger, settings, payload, client):
@@ -1019,6 +1054,22 @@ def cap_proxy(book, ledger, settings, payload, client):
         return "done", f"{resource.name} has no daily cap", {"cap": 0}
     return ("done", f"{resource.name} takes at most {cap} "
                     f"phone{'' if cap == 1 else 's'} a day", {"cap": cap})
+
+
+def end_proxy(book, ledger, settings, payload, client):
+    """When an exit ends - the day its seller stops it - or "" for none
+    (rev 46; set from the Proxies page, 2026-10-11). A date to read: nothing
+    is tested, and the farm hands the exit out the same before and after."""
+    resource, refused = _named(book, payload)
+    if refused:
+        return refused
+    day, wrong = _ends_of(payload)
+    if wrong:
+        return "refused", wrong, None
+    book.proxies.set_end(resource, day)
+    if not day:
+        return "done", f"{resource.name} has no end date", {"ends": ""}
+    return "done", f"{resource.name} ends on {_day_word(day)}", {"ends": day}
 
 
 def unshelve_proxy(book, ledger, settings, payload, client):
@@ -3244,6 +3295,7 @@ VERBS = {
     "shelve_proxy": shelve_proxy,
     "keep_proxy_for": keep_proxy_for,
     "cap_proxy": cap_proxy,
+    "end_proxy": end_proxy,
     "unshelve_proxy": unshelve_proxy,
     "free_proxies": free_proxies,
     "test_proxies": test_proxies,

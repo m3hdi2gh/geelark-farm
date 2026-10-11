@@ -404,7 +404,7 @@ thead th .g5 .d{color:var(--green)}thead th .g5 .x{color:var(--amber)}thead th .
 .wrap{overflow-x:auto}
 .card>.wrap:first-child{border-radius:13px}
 #notice:empty{display:none}
-table{width:100%;min-width:1180px;border-collapse:collapse}
+table{width:100%;min-width:1040px;border-collapse:collapse}
 thead th{text-align:left;padding:10px 11px;font-size:10px;font-weight:600;letter-spacing:.09em;text-transform:uppercase;
  color:var(--dim);background:rgba(20,29,46,.6);border-bottom:1px solid var(--line);white-space:nowrap}
 .card>.wrap:first-child>table>thead th:first-child{border-top-left-radius:13px}.card>.wrap:first-child>table>thead th:last-child{border-top-right-radius:13px}
@@ -446,7 +446,7 @@ tr:hover .box:not(.on){border-color:#7b8aa3}
 .nm3 .nl i{font:500 12.5px/1 var(--mono);font-style:normal;color:#c6b8ff}
 .nm2:hover .nm3 .nl b{color:var(--blue)}
 .nm3 small{display:inline-flex;align-items:center;gap:6px;font:11px/1 var(--sans);color:var(--dim);white-space:nowrap}
-.ty2{display:inline-grid;place-items:center;height:16px;padding:0 5px;border-radius:4px;font:600 9.5px/1 var(--mono);
+.ty2{display:inline-flex;align-items:center;gap:4px;height:16px;padding:0 5px;border-radius:4px;font:600 9.5px/1 var(--mono);
  color:var(--ink);background:rgba(255,255,255,.06);box-shadow:inset 0 0 0 1px var(--line)}
 .draw header .id>b i{font-style:normal;color:#c6b8ff}
 .cc{display:inline-grid;place-items:center;min-width:22px;height:16px;padding:0 4px;border-radius:4px;font:600 9.5px/1 var(--mono);
@@ -666,6 +666,8 @@ tr.flash td{animation:glow 1.6s ease-out}
  .cmp footer .go{flex:1 1 auto;justify-content:center}
  .who{padding-left:0;border-left:0}
  .who .nm{display:none}
+ /* A section's note is for a desk; a phone keeps the heading and its count. */
+ .sh .hint{display:none}
  .search{max-width:none;margin-left:0;flex-basis:100%}
  #s-ex{scroll-margin-top:16px}
  /* A control wider than the phone scrolls inside itself, never the page. */
@@ -715,3 +717,82 @@ html[data-rail="icons"] .rail-col .sel{max-width:calc(100% - 92px)}
 .arl small{grid-column:1/-1;font:11.5px/1.4 var(--mono);color:var(--muted);overflow-wrap:anywhere}
 .arl .none{padding:9px 8px;color:var(--dim)}
 .draw.opening .arl>*{animation:rise .35s var(--ease) both;animation-delay:calc(.08s + min(var(--i, 0), 16) * 22ms)}
+
+/* ------------------------------------------------------------ the end date */
+/* When a proxy ends: the day its seller stops it, beside the day it came -
+   amber a week or less away, red once it has come. A date to read; the farm
+   hands a proxy out the same before and after it. */
+.endd{font-weight:500;color:var(--muted)}
+.endd.soon{color:var(--amber)}.endd.gone{color:var(--red)}
+/* On a batch's card, before its cap. */
+.fam .where .endw{margin-left:auto;padding-left:10px;flex:none;font:500 11px/1 var(--sans);color:var(--muted);white-space:nowrap}
+.fam .where .endw.soon{color:var(--amber)}.fam .where .endw.gone{color:var(--red)}
+.fam .where .endw+.capw{margin-left:0;padding-left:0}
+.fam .where .endw+.capw::before{content:"\00b7";margin:0 7px;font-family:var(--sans);color:var(--dim)}
+/* The drawer's end door, in the colour of its date. */
+.doors button.ends.soon{color:var(--amber)}
+.doors button.ends.gone{color:var(--red)}
+.flag.q{--fc:var(--muted)}
+.flag.q::before{background:transparent;border-radius:2px;box-shadow:inset 0 0 0 1.5px var(--muted)}
+.act svg{width:13px;height:13px;flex:none}
+.act.on{color:var(--bright);border-color:#3f5a86;background:rgba(127,180,255,.1)}
+/* A row's More holds the end date, the date itself at the line's end. */
+.pop button small{margin-left:auto;padding-left:16px;font:500 11px/1 var(--mono);color:var(--dim)}
+.pop button small.endd{color:var(--muted)}.pop button small.endd.soon{color:var(--amber)}.pop button small.endd.gone{color:var(--red)}
+/* The calendar: the date at the top - day month year, its weekday and how
+   far it is - three steps later, a month of days in a quiet grid, then No end
+   date and Set. The chosen day is filled in the page's blue; today wears a
+   ring; days gone by are dim. */
+.pop .calx{display:flex;flex-direction:column;gap:12px;width:272px;padding:8px 6px 2px}
+.calt{display:flex;flex-direction:column;gap:7px;padding:0 4px}
+.calt .k{font:10px/1 var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--dim)}
+.cald{display:flex;flex-direction:column;gap:5px}
+.cald b{font:500 20px/1.1 var(--mono);letter-spacing:-.3px;color:var(--bright)}
+.cald b.none{font:500 16px/1.2 var(--sans);letter-spacing:0;color:var(--muted)}
+.cald small{font-size:12px;color:var(--dim)}
+.calt .en{font-size:11.5px;line-height:1.4;color:var(--muted)}
+.calq{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:2px;padding:3px;border-radius:10px;background:rgba(8,12,20,.55);border:1px solid var(--line2)}
+.pop .calq button{height:28px;padding:0;justify-content:center;border-radius:7px;font:500 11.5px/1 var(--sans);color:var(--quiet)}
+.calnav{display:flex;align-items:center;justify-content:space-between;padding:2px 2px 0}
+.calnav b{font-size:12.5px;font-weight:600;color:var(--ink)}
+.pop .calnav .cn{width:28px;height:28px;padding:0;justify-content:center;border-radius:8px;color:var(--dim)}
+.pop .calnav .cn svg{width:14px;height:14px}
+.calnav .cn[data-cal="-1"] svg{transform:rotate(90deg)}
+.calnav .cn[data-cal="1"] svg{transform:rotate(-90deg)}
+.calg{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:2px}
+.calg .cw{height:22px;display:grid;place-items:center;font:600 9.5px/1 var(--sans);letter-spacing:.06em;text-transform:uppercase;color:var(--dim)}
+.pop .calg .cd{height:32px;padding:0;justify-content:center;border-radius:8px;font:500 12.5px/1 var(--mono);color:var(--ink)}
+.pop .calg .cd.past{color:#5d6a80}
+.pop .calg .cd.now{box-shadow:inset 0 0 0 1px var(--edge);color:var(--bright)}
+.pop .calg .cd:hover{background:var(--hover);color:var(--bright)}
+.pop .calg .cd.on,.pop .calg .cd.on:hover{background:var(--blue);color:#0b1019;font-weight:600;box-shadow:none}
+.pop .calg .cd:focus-visible{outline-offset:-2px}
+.calf{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:0 -6px;padding:9px 6px 0;border-top:1px solid var(--line2)}
+.pop .calf .clr{height:32px;padding:0 8px;font-size:12px;color:var(--dim)}
+.pop .calf .clr:hover{background:none;color:var(--bright)}
+.pop .calf .go{height:32px;min-width:72px;padding:0 18px;justify-content:center;border-radius:999px;font-size:12.5px;font-weight:600;color:#0b1019;
+ background:var(--blue);box-shadow:0 8px 20px -12px rgba(127,180,255,.9)}
+.pop .calf .go:hover{background:#9cc6ff;color:#0b1019}
+.pop .calf .go:disabled{opacity:.35;cursor:default;box-shadow:none}
+/* The Add proxies form's date: a field beside the lane and the cap that
+   opens the calendar, the date and how far it is inside it. */
+.datef{display:flex;align-items:center;gap:8px;width:100%;min-width:0;height:34px;padding:0 10px 0 11px;border-radius:9px;border:1px solid var(--line);
+ background:rgba(8,12,20,.5);color:var(--dim);font:13px/1 var(--sans);text-align:left;transition:border-color .15s,background .15s}
+.datef .dv{white-space:nowrap}
+.datef.set .dv{color:var(--bright);font:500 13px/1 var(--mono)}
+.datef .dl{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11.5px;color:var(--dim)}
+.datef>svg{width:14px;height:14px;flex:none;color:var(--dim)}
+.datef>svg:last-child{width:12px;height:12px;margin-left:auto}
+.datef:hover,.datef.on{border-color:var(--edge);background:var(--hover)}
+
+/* ---------------------------------------------------------- the row's cells */
+/* A row's Lane and Today cells are its lane and cap doors: they read as the
+   cell they are, and show they open under the pointer - nothing on a row is
+   said twice, and its last column keeps only More. */
+.cell{display:inline-flex;align-items:center;gap:7px;height:30px;margin:0 -9px;padding:0 9px;border-radius:8px;border:1px solid transparent;
+ transition:background .15s,border-color .15s}
+.cell b{font-size:12px;font-weight:500;color:var(--ink)}
+.cell>svg{width:11px;height:11px;flex:none;color:var(--dim);opacity:0;transition:opacity .15s}
+.cell:hover,.cell.on{background:rgba(8,12,20,.35);border-color:var(--edge)}
+.cell:hover>svg,.cell.on>svg,.cell:focus-visible>svg{opacity:1}
+td.dr{width:1%}

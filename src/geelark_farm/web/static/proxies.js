@@ -15,7 +15,7 @@ const WORD = {done: "Done", decline: "Decline", or: "OR", auth: "Auth", failed: 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const view = {range: "a", axis: "day", scope: "all", lane: "", fam: "", q: "", sort: "name", dir: 1, flag: ""};
 const ticked = new Set();
-let menu = "", noteTimer = 0, menuFrom = null, drawerFrom = null;
+let menu = "", noteTimer = 0, menuFrom = null, drawerFrom = null, menuAt = null;
 /* What the last action touched: its rows and card glow once, a switch it
    turned on glows once. Each is read by the next draw and then emptied. */
 const flashIds = new Set(), litIds = new Set();
@@ -44,6 +44,7 @@ const ICON = {
  more: '<circle cx="5" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.6" fill="currentColor" stroke="none"/>',
  trash: '<path d="M4 7h16"/><path d="M9 7V4.5h6V7"/><path d="M6 7l1 13h10l1-13"/>',
  chev: '<path d="M6 9l6 6 6-6"/>',
+ cal: '<rect x="3.5" y="5" width="17" height="15.5" rx="2.5"/><path d="M3.5 10h17M8 3v4M16 3v4"/>',
 };
 const LOGO = {
  gpt: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M22.28 9.82a5.98 5.98 0 0 0-.51-4.91 6.05 6.05 0 0 0-6.51-2.9A6.07 6.07 0 0 0 4.98 4.18a5.98 5.98 0 0 0-4 2.9 6.05 6.05 0 0 0 .75 7.1 5.98 5.98 0 0 0 .51 4.91 6.05 6.05 0 0 0 6.51 2.9A5.98 5.98 0 0 0 13.26 24a6.06 6.06 0 0 0 5.77-4.21 5.99 5.99 0 0 0 4-2.9 6.06 6.06 0 0 0-.75-7.07zm-9.02 12.61a4.48 4.48 0 0 1-2.88-1.04l.14-.08 4.78-2.76a.79.79 0 0 0 .39-.68v-6.74l2.02 1.17a.07.07 0 0 1 .04.05v5.58a4.5 4.5 0 0 1-4.49 4.5zM3.6 18.3a4.47 4.47 0 0 1-.54-3.01l.15.08 4.78 2.76a.77.77 0 0 0 .78 0l5.84-3.37v2.34a.08.08 0 0 1-.03.06L9.74 19.95a4.5 4.5 0 0 1-6.14-1.65zM2.34 7.9a4.49 4.49 0 0 1 2.37-1.98V11.6a.77.77 0 0 0 .39.68l5.81 3.35-2.02 1.17a.08.08 0 0 1-.07 0L4 14.02A4.5 4.5 0 0 1 2.34 7.87zm16.6 3.86L13.1 8.36l2.02-1.16a.08.08 0 0 1 .07 0l4.83 2.79a4.49 4.49 0 0 1-.68 8.1v-5.67a.79.79 0 0 0-.4-.67zm2.01-3.03l-.14-.08-4.78-2.78a.78.78 0 0 0-.78 0L9.41 9.23V6.9a.07.07 0 0 1 .03-.06l4.83-2.79a4.5 4.5 0 0 1 6.68 4.66zM8.31 12.86l-2.02-1.16a.08.08 0 0 1-.04-.06V6.07a4.5 4.5 0 0 1 7.38-3.45l-.14.08-4.78 2.76a.79.79 0 0 0-.4.68zm1.1-2.36l2.6-1.5 2.61 1.5v3l-2.6 1.5-2.6-1.5z"/></svg>',
@@ -63,13 +64,56 @@ const prettySeller = s => s && s === s.toLowerCase() ? s[0].toUpperCase() + s.sl
 const prettyType = s => !s ? "" : s.length <= 3 ? s.toUpperCase() : s === s.toLowerCase() ? s[0].toUpperCase() + s.slice(1) : s;
 /* A proxy's name to read: a batch proxy as "Oxylab ISP #1", any other as its key. */
 const nameText = e => e.batch ? [e.seller, e.type].filter(Boolean).join(" ") + " #" + e.k : e.n;
-const nameHtml = e => !e.batch ? esc(e.n) : '<span class="nm3"><span class="nl"><b>' + esc(e.seller) + '</b><i>#' + e.k + '</i></span><small>' +
-  (e.type ? '<span class="ty2">' + esc(e.type) + '</span>' : '') + esc(stamp(e.added)) + '</small></span>';
+const nameHtml = e => !e.batch ? (e.exp ? '<span class="nm3"><span class="nl"><b>' + esc(e.n) + '</b></span><small>until ' + endHtml(e.exp) + '</small></span>' : esc(e.n))
+  : '<span class="nm3"><span class="nl"><b>' + esc(e.seller) + '</b><i>#' + e.k + '</i></span><small>' +
+  (e.type ? '<span class="ty2">' + esc(e.type) + '</span>' : '') + esc(stamp(e.added)) + (e.exp ? ' \u2013 ' + endHtml(e.exp) : '') + '</small></span>';
 const laneWord = l => !l ? "Either" : l === "gpt" ? "GPT" : "Spotify";
 const tile = (l, sm) => !l ? '<span class="app either' + (sm ? " sm" : "") + '"><span class="pair">' + LOGO.gpt + LOGO.spotify + '</span></span>' : '<span class="app ' + l + (sm ? " sm" : "") + '">' + LOGO[l] + '</span>';
 const stamp = s => { const m = /(\d{4})?-?(\d\d)-(\d\d)(?: (\d\d:\d\d))?/.exec(s || ""); return m ? (+m[3]) + " " + MONTHS[+m[2] - 1] + (m[4] ? " " + m[4] : "") : ""; };
 /* In play: handed to builds - free, or on a phone it keeps. */
 const inPlay = e => e.s === "free" || (e.s === "phone" && !e.after);
+/* When a proxy ends: the day its seller stops it, "YYYY-MM-DD" in `exp`, ""
+   for none - whole Tehran days from today. A date to read, nothing more: the
+   farm hands a proxy out the same before and after it. The page colours it
+   as it nears - amber a week or less away, red once it has come - so it is
+   renewed in time. */
+const SOON = 7;
+const dayNo = iso => Math.round(Date.UTC(+iso.slice(0, 4), +iso.slice(5, 7) - 1, +iso.slice(8, 10)) / 864e5);
+const isoOf = n => new Date(n * 864e5).toISOString().slice(0, 10);
+const leftOf = e => e.exp ? dayNo(e.exp) - dayNo(DAY.iso) : null;
+const isEnding = e => e.exp ? leftOf(e) <= SOON : false;
+const dayWord = n => n + (n === 1 ? " day" : " days");
+/* A date as the page says it: "1 Nov", the year only when it is not this one. */
+const dateWord = iso => stamp(iso) + (iso.slice(0, 4) !== DAY.iso.slice(0, 4) ? " " + iso.slice(0, 4) : "");
+/* The end from today, in words: "21 days left", "ends tomorrow", "ended today", "ended 9 Oct". */
+function endLeft(iso) {
+  const n = dayNo(iso) - dayNo(DAY.iso);
+  return n > 1 ? dayWord(n) + " left" : n === 1 ? "ends tomorrow" : n === 0 ? "ended today" : "ended " + dateWord(iso);
+}
+const endCls = iso => { const n = dayNo(iso) - dayNo(DAY.iso); return n <= 0 ? "gone" : n <= SOON ? "soon" : ""; };
+/* The end date in a line of text, in the colour of how near it is. */
+const endHtml = iso => '<b class="endd ' + endCls(iso) + '">' + esc(dateWord(iso)) + '</b>';
+const okIso = s => /^\d{4}-\d\d-\d\d$/.test(s || "");
+const WEEK_LONG = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const dowOf = iso => new Date(dayNo(iso) * 864e5).getUTCDay();
+/* A date in full, day month year: "10 Nov 2026". */
+const fullWord = iso => (+iso.slice(8, 10)) + " " + MONTHS[+iso.slice(5, 7) - 1] + " " + iso.slice(0, 4);
+/* Beside a date being chosen: its weekday and how far it is. */
+function endCaption(iso) {
+  return okIso(iso) ? WEEK_LONG[dowOf(iso)] + " \u00b7 " + endAway(iso) : "";
+}
+/* How far a date is from today: "in 30 days", "tomorrow", "today", "3 days ago". */
+function endAway(iso) {
+  const n = dayNo(iso) - dayNo(DAY.iso);
+  return n > 1 ? "in " + dayWord(n) : n === 1 ? "tomorrow" : n === 0 ? "today" : dayWord(-n) + " ago";
+}
+/* A group's ends at a glance: the one date they share, or the first and last. */
+function endsOf(list) {
+  const set = [...new Set(list.map(e => e.exp || ""))], dated = set.filter(Boolean).sort();
+  return {one: set.length === 1 ? set[0] : null, first: dated[0] || "", last: dated[dated.length - 1] || "", none: list.filter(e => !e.exp).length};
+}
+/* The date a group's dialog opens on: the one its dated proxies share, if they do. */
+const endFirst = en => en.first && en.first === en.last ? en.first : "";
 /* A proxy's switch: on while in play; off when set aside or dead; off but
    amber while still on a phone, until that phone goes. */
 function psw(e) {
@@ -111,8 +155,12 @@ const FLAGS = [
    why: () => "It has carried as many phones today as its daily cap allows, and waits for tomorrow."},
   {k: "fresh", w: "Never used", c: "n", test: e => !(e.u || []).length,
    why: () => "No phone has been built on it or moved onto it yet."},
-  {k: "dead", w: "Dead", c: "r", rare: true, test: e => e.s === "dead",
+  {k: "dead", w: "Dead", c: "r", test: e => e.s === "dead",
    why: () => "Its last test failed; it stays out of the builds until it passes one."},
+  {k: "ending", w: "Ending soon", c: "x", test: isEnding,
+   why: () => "Its end date is " + SOON + " days away or less, or has passed: renew it with the seller and set the new date."},
+  {k: "nodate", w: "No end date", c: "q", test: e => !e.exp,
+   why: () => "No end date is set. Tick them and set one from the bar below."},
 ];
 const FLAG = Object.fromEntries(FLAGS.map(f => [f.k, f]));
 /* The orders the list can take, each said in words both ways; null sorts
@@ -125,10 +173,11 @@ const SORTS = {
   phones: {w: ["Most phones first", "Fewest phones first"], dir: -1, val: e => sum(vOf(e))},
   today: {w: ["Busiest today first", "Quietest today first"], dir: -1, val: e => e.today},
   state: {w: ["On phones first", "Set aside first"], dir: 1, val: e => ({phone: 0, free: 1, aside: 2, dead: 3})[e.s]},
+  ends: {w: ["Ends soonest first", "Ends latest first"], dir: 1, val: leftOf},
 };
-/* The menu holds the five orders that answer the page's questions; Today and
+/* The menu holds the orders that answer the page's questions; Today and
    State stay a click on their column heads away. */
-const SORT_MENU = [["name"], ["or", "decline", "done", "phones"]];
+const SORT_MENU = [["name"], ["or", "decline", "done", "phones"], ["ends"]];
 const sortWord = (k, dir) => SORTS[k].w[dir === SORTS[k].dir ? 0 : 1];
 
 /* ----------------------------------------------------------------- rounds */
@@ -329,7 +378,7 @@ function famList() {
     // In play while any proxy is handed out - free, or on a phone it keeps.
     f.on = f.ex.some(e => inPlay(e) || pend.get(e.id) === "free");
     f.busy = f.ex.some(e => pend.get(e.id) === "free");
-    f.n = sum(f.v); f.adv = advice(f.v); return f;
+    f.n = sum(f.v); f.adv = advice(f.v); f.end = endsOf(f.ex); return f;
   })
     .sort((a, b) => b.on - a.on || order[a.adv[0]] - order[b.adv[0]] || (pct(b.v[0], b.n) ?? -1) - (pct(a.v[0], a.n) ?? -1) || b.n - a.n)
     // The order is taken once, when the page opens, and then kept: a card does
@@ -370,6 +419,12 @@ function renderFams() {
     const rnd = '<span class="rnd' + (off ? " paused" : "") + '"><b>' + (rs.hi ? "Round " + rs.cur : "Not used yet") + '</b>' +
       '<span class="rbar">' + (rs.hi ? '<i style="left:' + at(rs.lo) + ';width:' + at(rs.hi - rs.lo) + '"></i><u style="left:' + at(rs.cur) + '"></u>' : '') + '</span><small>' +
       [off ? "set aside" : "", rs.hi ? (rs.lo === rs.hi ? "all at " + rs.hi + (rs.hi === 1 ? " use" : " uses") : "uses " + rs.lo + "\u2013" + rs.hi) : "", rest != null ? "rest " + fmtH(rest) : ""].filter(Boolean).join(" \u00b7 ") + '</small></span>';
+    // When it ends, at the card's foot before its cap: the day - or how soon,
+    // once it is a week away or less - or, when its proxies end apart, the
+    // first and the last day. Nothing when none is set.
+    const en = f.end, n0 = en.first ? dayNo(en.first) - dayNo(DAY.iso) : null;
+    const endw = !en.first ? '' : '<span class="endw ' + endCls(en.first) + '">' + (en.first !== en.last ? "ends " + esc(dateWord(en.first)) + "\u2013" + esc(dateWord(en.last))
+      : n0 > SOON ? "ends " + esc(dateWord(en.first)) : n0 > 1 ? "ends in " + dayWord(n0) : n0 === 1 ? "ends tomorrow" : n0 === 0 ? "ended today" : "ended " + esc(dateWord(en.first))) + '</span>';
     const k = esc(f.key), mk = "b|" + f.key + "|more";
     return '<div class="fam ' + (one || "either") + (view.fam === f.key ? " on" : "") + (off ? " paused" : "") + (flashFam === f.key ? " flash" : "") + still + '" style="--i:' + i + '">' +
       '<button class="hit" type="button" data-fam="' + k + '" aria-pressed="' + (view.fam === f.key) + '" aria-label="Show only the proxies of ' + esc(f.label) + '"></button>' +
@@ -383,7 +438,7 @@ function renderFams() {
       '<span class="rate"><b class="tab">' + f.n + '</b><small>phones</small></span>' +
       '<span class="rate' + (f.today ? "" : " na") + '"><b class="tab">' + f.today + '</b><small>today</small></span></span>' +
       (f.n ? mixBar(f.v) : '<span class="mix"></span>') +
-      '<span class="where">' + where + '<span class="isp">' + isp + '</span><span class="capw">' + capw + '</span></span></div>';
+      '<span class="where">' + where + '<span class="isp">' + isp + '</span>' + endw + '<span class="capw">' + capw + '</span></span></div>';
   }).join("");
   flashFam = "";
 }
@@ -394,10 +449,11 @@ function renderTools() {
   el("sortbox").innerHTML = '<button class="sortb' + (menu === "sort" ? " on" : "") + '" type="button" data-menu="sort" aria-haspopup="menu" aria-expanded="' + (menu === "sort") + '" aria-label="Sort: ' + sortWord(view.sort, view.dir) + '"><small>Sort</small><b>' + sortWord(view.sort, view.dir) + '</b>' + SVG(ICON.chev, 2.2) + '</button>';
   const fam = view.fam ? (famList().find(f => f.key === view.fam) || {}).label : "";
   el("famchip").innerHTML = fam ? '<button class="chip" type="button" data-clear="fam" aria-label="Show every batch, not only ' + esc(fam) + '"><span>Batch ' + esc(fam) + '</span>' + SVG(ICON.cross, 2.6) + '</button>' : "";
-  // Show only: a rule with nothing in it is drawn faint; Dead only when there is one.
-  const fl = FLAGS.map(f => [f, cnt("flag", f.test)]).filter(([f, n]) => n || !f.rare || view.flag === f.k), on = view.flag ? FLAG[view.flag] : null;
+  // Show only: the rules something answers to, and the one chosen - a rule
+  // with nothing in it is left out, so the row stays one line.
+  const fl = FLAGS.map(f => [f, cnt("flag", f.test)]).filter(([f, n]) => n || view.flag === f.k), on = view.flag ? FLAG[view.flag] : null;
   el("flags").innerHTML = '<span class="k">Show only</span>' + fl.map(([f, n]) =>
-    '<button type="button" class="flag ' + f.c + '" data-flag="' + f.k + '" aria-pressed="' + (view.flag === f.k) + '"' + (n || view.flag === f.k ? '' : ' disabled') + '>' + f.w + ' <b class="tab">' + n + '</b></button>').join("") +
+    '<button type="button" class="flag ' + f.c + '" data-flag="' + f.k + '" aria-pressed="' + (view.flag === f.k) + '">' + f.w + ' <b class="tab">' + n + '</b></button>').join("") +
     (narrowed() ? '<button class="link clr" type="button" data-clear="all">Clear filters</button>' : '');
   el("flagwhy").innerHTML = on ? '<p class="flagwhy"><b>' + on.w + '</b> \u00b7 ' + on.why() + '</p>' : '';
 }
@@ -427,6 +483,10 @@ function todayCell(e) {
   const n = e.today, c = e.cap, cls = c && n >= c ? "capped" : n >= 4 ? "hot" : n === 3 ? "warm" : "";
   return '<span class="today ' + cls + '">' + n + (c ? '<small>/ ' + c + '</small>' : '') + '</span>';
 }
+/* A row's Lane and Today cells are its lane and cap doors: what they show is
+   what they change, and a chevron says so under the pointer. */
+const laneCell = e => doorOf(e, "lane", "cell", "menu", "Lane of " + esc(nameText(e)) + ": " + laneWord(e.lane), tile(e.lane, true) + '<b>' + laneWord(e.lane) + '</b>' + SVG(ICON.chev, 2.2));
+const capCell = e => doorOf(e, "cap", "cell", "dialog", "Today " + e.today + "; daily cap of " + esc(nameText(e)) + ": " + (e.cap ? e.cap + " a day" : "none"), todayCell(e) + SVG(ICON.chev, 2.2));
 function ipCell(e) {
   if (!e.ip) return '<span class="ipc none"><b>Not read yet</b><small>read on its next test</small></span>';
   return '<span class="ipc"><b>' + esc(e.ip) + '<span class="cc' + (isOff(e) ? " off" : "") + '">' + esc(e.cc || "?") + '</span></b><small>' + esc(e.isp || "") + '</small></span>';
@@ -440,13 +500,18 @@ function respCell(e, top) {
     K.map((k, i) => '<b class="tab ' + k + (v[i] ? " live" : "") + '">' + v[i] + '</b>').join("") + rate(0, "g") + rate(1, "xr") + rate(2, "r") + '</span>' +
     '<span class="vol" aria-hidden="true">' + fill + '</span></span>';
 }
-function doors(e) {
-  const id = e.id, open = k => menu === id + ":" + k, who = esc(nameText(e));
-  const door = (k, cls, pop, label, body) => '<button type="button" class="' + cls + (open(k) ? " on" : "") + '" data-menu="' + id + ':' + k + '" aria-haspopup="' + pop + '" aria-expanded="' + open(k) + '" aria-label="' + label + '">' + body + '</button>';
+/* A proxy's doors. In its drawer: its lane, cap and end date as their words,
+   then More. On a row only More - the row's Lane and Today cells are its lane
+   and cap doors, so nothing on the row is said twice. */
+const doorOf = (e, k, cls, pop, label, body) => { const open = menu === e.id + ":" + k; return '<button type="button" class="' + cls + (open ? " on" : "") + '" data-menu="' + e.id + ':' + k + '" aria-haspopup="' + pop + '" aria-expanded="' + open + '" aria-label="' + label + '">' + body + '</button>'; };
+function doors(e, inDraw) {
+  const who = esc(nameText(e)), more = doorOf(e, "more", "more", "menu", "More for " + who, SVG(ICON.more, 2));
+  if (!inDraw) return '<span class="doors">' + more + '</span>';
   return '<span class="doors">' +
-    door("lane", "", "menu", "Lane of " + who + ": " + laneWord(e.lane), SVG(ICON.lane, 1.9) + laneWord(e.lane) + SVG(ICON.chev, 2.2)) +
-    door("cap", "", "dialog", "Daily cap of " + who + ": " + (e.cap ? e.cap + " a day" : "none"), SVG(ICON.cap, 1.9) + (e.cap ? e.cap + "/day" : "No cap") + SVG(ICON.chev, 2.2)) +
-    door("more", "more", "menu", "More for " + who, SVG(ICON.more, 2)) + '</span>';
+    doorOf(e, "lane", "", "menu", "Lane of " + who + ": " + laneWord(e.lane), SVG(ICON.lane, 1.9) + laneWord(e.lane) + SVG(ICON.chev, 2.2)) +
+    doorOf(e, "cap", "", "dialog", "Daily cap of " + who + ": " + (e.cap ? e.cap + " a day" : "none"), SVG(ICON.cap, 1.9) + (e.cap ? e.cap + "/day" : "No cap") + SVG(ICON.chev, 2.2)) +
+    doorOf(e, "ends", e.exp ? "ends " + endCls(e.exp) : "ends", "dialog", "End date of " + who + ": " + (e.exp ? dateWord(e.exp) : "none"), SVG(ICON.cal, 1.9) + (e.exp ? "Ends " + esc(dateWord(e.exp)) : "No end date") + SVG(ICON.chev, 2.2)) +
+    more + '</span>';
 }
 function renderRows() {
   const rows = shown(), top = Math.max(1, ...EX.map(x => sum(vOf(x))));
@@ -454,9 +519,9 @@ function renderRows() {
     '<tr data-id="' + e.id + '" class="' + (ticked.has(e.id) ? "ticked " : "") + (isOff(e) ? "off " : "") + (flashIds.has(e.id) ? "flash" : "") + '">' +
     '<td class="tk"><button class="box' + (ticked.has(e.id) ? " on" : "") + '" type="button" role="checkbox" aria-checked="' + ticked.has(e.id) + '" data-tick="' + e.id + '" aria-label="Select ' + esc(nameText(e)) + '">' + SVG(ICON.tick, 3.4) + '</button></td>' +
     '<td><span class="nm2" data-open="' + e.id + '" role="button" tabindex="0" title="Open its story">' + nameHtml(e) + '</span></td>' +
-    '<td><span class="stc">' + psw(e) + '<span>' + pill(e) + '</span></span></td><td><span class="lane">' + tile(e.lane, true) + '<b>' + laneWord(e.lane) + '</b></span></td>' +
-    '<td>' + ipCell(e) + '</td><td>' + todayCell(e) + '</td><td>' + respCell(e, top) + '</td>' +
-    '<td>' + doors(e) + '</td></tr>').join("")
+    '<td><span class="stc">' + psw(e) + '<span>' + pill(e) + '</span></span></td><td>' + laneCell(e) + '</td>' +
+    '<td>' + ipCell(e) + '</td><td>' + capCell(e) + '</td><td>' + respCell(e, top) + '</td>' +
+    '<td class="dr">' + doors(e) + '</td></tr>').join("")
     : '<tr class="none-row"><td colspan="8"><b>No proxy matches that.</b>' + (narrowed() ? '<button class="link" type="button" data-clear="all">Clear filters</button>' : '') + '</td></tr>';
   flashIds.clear();
   el("count").innerHTML = '<b class="tab">' + rows.length + '</b> of <b class="tab">' + EX.length + '</b>';
@@ -474,9 +539,10 @@ function renderRows() {
 }
 function renderPop() {
   const p = el("pop"), d = el("layer").querySelector(".draw"), dp = d && d.querySelector(".dpop");
-  if (!menu) { p.innerHTML = ""; if (dp) dp.remove(); return; }
-  // The drawer's door before the same door in the list behind it.
-  const at = '[data-menu="' + menu + '"]', btn = el("layer").querySelector(at) || document.querySelector(at);
+  if (!menu) { p.innerHTML = ""; menuAt = null; if (dp) dp.remove(); return; }
+  // The button it was opened from - a row's More, for its end date - or its
+  // door: the drawer's door before the same door in the list behind it.
+  const at = '[data-menu="' + menu + '"]', btn = (menuAt && menuAt.isConnected ? menuAt : null) || el("layer").querySelector(at) || document.querySelector(at);
   if (!btn) { menu = ""; p.innerHTML = ""; return; }
   const inDraw = !!btn.closest(".draw");
   const [idS, kind] = menu.split(":");
@@ -484,13 +550,20 @@ function renderPop() {
   let html = "";
   if (menu === "sort") html = SORT_MENU.map(g => g.map(k => '<button type="button" role="menuitemradio" aria-checked="' + (view.sort === k) + '" class="' + (view.sort === k ? "on" : "") + '" data-sortk="' + k + '">' + sortWord(k, SORTS[k].dir) + '</button>').join("")).join('<span class="sepm"></span>');
   else if (menu.startsWith("b|")) html = batchMenu(menu.slice(2, -5));
+  else if (menu === "sel:ends") html = selEnds();
+  else if (menu.startsWith("e|")) html = batchEnds(menu.slice(2));
+  else if (menu === "cmp:ends") html = endDialog(cmpEnd, "", "Ends on");
+  else if (kind === "ends") html = endDialog(e ? e.exp : "", 'data-do="%" data-id="' + id + '"', "Ends on");
   else if (kind === "lane") html = [["gpt", "Keep for GPT"], ["spotify", "Keep for Spotify"], ["", "Either lane"]].map(([l, w]) => '<button type="button" class="' + (e && e.lane === l ? "on" : "") + '" data-do="lane:' + l + '" data-id="' + id + '">' + (l ? tile(l, true) : SVG(ICON.lane, 1.9)) + w + '</button>').join("");
   else if (kind === "cap") html = '<div class="capm"><span class="k">Phones a day</span><span class="step"><button type="button" data-step="-1" aria-label="One phone fewer">\u2212</button><input id="pop-cap" value="' + (e ? e.cap : 0) + '" inputmode="numeric" autocomplete="off" aria-label="Phones a day, 0 for no cap"><button type="button" data-step="1" aria-label="One phone more">+</button><small>' + (e && e.cap ? "a day" : "no cap") + '</small></span>' +
     '<span class="row"><button type="button" class="on" data-do="capset" data-id="' + id + '">Set</button><button type="button" data-do="cap:0" data-id="' + id + '">No cap</button></span></div>';
-  else html = (inDraw ? '' : '<button type="button" data-do="story" data-id="' + id + '">' + SVG(ICON.phone, 2) + 'Open its story</button>') + '<button type="button" data-do="test" data-id="' + id + '">' + SVG(ICON.reload, 2) + 'Test now</button><button type="button" class="bad" data-do="remove" data-id="' + id + '">' + SVG(ICON.trash, 2) + 'Remove</button>';
+  // More: on a row it also holds the end date, which the drawer has as a door.
+  else html = (inDraw ? '' : '<button type="button" data-do="story" data-id="' + id + '">' + SVG(ICON.phone, 2) + 'Open its story</button>' +
+      '<button type="button" data-ends="' + id + '">' + SVG(ICON.cal, 2) + 'End date' + (e && e.exp ? '<small class="endd ' + endCls(e.exp) + '">' + esc(dateWord(e.exp)) + '</small>' : '<small>none</small>') + '</button>') +
+    '<button type="button" data-do="test" data-id="' + id + '">' + SVG(ICON.reload, 2) + 'Test now</button><button type="button" class="bad" data-do="remove" data-id="' + id + '">' + SVG(ICON.trash, 2) + 'Remove</button>';
   // A list of choices is a menu; one with a stepper in it is a small dialog.
   const isMenu = menu === "sort" || kind === "lane" || kind === "more";
-  const label = menu === "sort" ? "Sort" : menu.startsWith("b|") ? "Batch actions" : kind === "lane" ? "Lane" : kind === "cap" ? "Phones a day" : "More";
+  const label = menu === "sort" ? "Sort" : menu.startsWith("b|") ? "Batch actions" : kind === "ends" || menu.startsWith("e|") ? "End date" : kind === "lane" ? "Lane" : kind === "cap" ? "Phones a day" : "More";
   // Opened in the drawer, the menu lives inside it: the drawer stays the
   // one modal a screen reader is in, and its menu is part of it.
   let host = p;
@@ -515,8 +588,98 @@ function batchMenu(key) {
       '<button type="button" class="' + (lanes.length === 1 && lanes[0] === l ? "on" : "") + '" data-bdo="lane:' + l + '" data-key="' + k + '">' + (l ? tile(l, true) : SVG(ICON.lane, 1.9)) + w + '</button>').join("") +
     '<span class="sepm"></span><div class="capm"><span class="k">Phones a day, each proxy</span><span class="step"><button type="button" data-step="-1" aria-label="One phone fewer">\u2212</button><input id="pop-cap" value="' + cap + '" inputmode="numeric" autocomplete="off" aria-label="Phones a day, 0 for no cap"><button type="button" data-step="1" aria-label="One phone more">+</button><small>' + (cap ? "a day" : "no cap") + '</small></span>' +
     '<span class="row"><button type="button" class="on" data-bdo="capset" data-key="' + k + '">Set</button><button type="button" data-bdo="cap:0" data-key="' + k + '">No cap</button></span></div><span class="sepm"></span>' +
+    '<button type="button" data-bends="' + k + '">' + SVG(ICON.cal, 2) + 'End date, each proxy' + '<small class="endd ' + (f.end.first ? endCls(f.end.first) : '') + '">' +
+      (!f.end.first ? 'none' : f.end.first === f.end.last && !f.end.none ? esc(dateWord(f.end.first)) : 'vary') + '</small></button>' +
     '<button type="button" data-bdo="test" data-key="' + k + '">' + SVG(ICON.reload, 2) + 'Test every proxy</button>' +
     '<button type="button" data-bdo="tick" data-key="' + k + '">' + SVG(ICON.tick, 2.4) + 'Tick its proxies in the list</button>';
+}
+/* ------------------------------------------------------------ the calendar */
+/* Choosing an end date, for one proxy, a batch or the ticked ones: the date
+   at the top - day month year - with its weekday and how far it is; three
+   steps later than it (or than today, when there is none or it has passed);
+   a month to pick from, its week starting on Saturday as the farm's does;
+   then No end date or Set. The Add proxies form keeps its date until it
+   sends, so a pick there is the answer and the calendar closes. `act` is the
+   attributes of Set and No end date, with % for what each asks; "" for the
+   form. */
+const MONTH_LONG = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+const WEEK_HEAD = ["Sa", "Su", "Mo", "Tu", "We", "Th", "Fr"];
+const cal = {iso: "", month: "", form: false};
+const monthWord = () => MONTH_LONG[+cal.month.slice(5, 7) - 1] + " " + cal.month.slice(0, 4);
+const calHead = () => cal.iso ? '<b>' + fullWord(cal.iso) + '</b><small>' + endCaption(cal.iso) + '</small>'
+  : '<b class="none">No end date</b><small>Pick a day, or a step below</small>';
+function calGrid() {
+  const y = +cal.month.slice(0, 4), m = +cal.month.slice(5, 7), first = Date.UTC(y, m - 1, 1) / 864e5;
+  const days = new Date(Date.UTC(y, m, 0)).getUTCDate(), lead = (new Date(first * 864e5).getUTCDay() + 1) % 7, today = dayNo(DAY.iso);
+  // The one day the keyboard lands on: the chosen day, today, or the 1st.
+  const focus = cal.iso.slice(0, 7) === cal.month ? cal.iso : DAY.iso.slice(0, 7) === cal.month ? DAY.iso : cal.month + "-01";
+  let html = WEEK_HEAD.map(w => '<span class="cw" aria-hidden="true">' + w + '</span>').join("") + (lead ? '<span style="grid-column:span ' + lead + '"></span>' : '');
+  for (let d = 1; d <= days; d++) {
+    const iso = cal.month + "-" + (d < 10 ? "0" : "") + d, n = first + d - 1;
+    html += '<button type="button" class="cd' + (iso === cal.iso ? " on" : "") + (n === today ? " now" : n < today ? " past" : "") + '" data-day="' + iso + '" tabindex="' + (iso === focus ? 0 : -1) +
+      '" aria-pressed="' + (iso === cal.iso) + '" aria-label="' + WEEK_LONG[dowOf(iso)] + " " + fullWord(iso) + (n === today ? ", today" : "") + '">' + d + '</button>';
+  }
+  return html;
+}
+function endDialog(iso, act, label, note) {
+  cal.iso = okIso(iso) ? iso : ""; cal.month = (cal.iso || DAY.iso).slice(0, 7); cal.form = !act;
+  const a = w => act.replace("%", w);
+  return '<div class="calx"><div class="calt"><span class="k">' + label + '</span><span class="cald" aria-live="polite">' + calHead() + '</span>' + (note || '') + '</div>' +
+    '<span class="calq" role="group" aria-label="Later by">' + [7, 30, 90].map(n => '<button type="button" data-qd="' + n + '">+' + n + ' days</button>').join("") + '</span>' +
+    '<div class="calnav"><button type="button" class="cn" data-cal="-1" aria-label="Month before">' + SVG(ICON.chev, 2.2) + '</button><b class="calm">' + monthWord() + '</b>' +
+    '<button type="button" class="cn" data-cal="1" aria-label="Month after">' + SVG(ICON.chev, 2.2) + '</button></div>' +
+    '<div class="calg" role="group" aria-label="' + monthWord() + '">' + calGrid() + '</div>' +
+    '<div class="calf"><button type="button" class="clr" ' + (act ? a("ends:") : 'data-cmpend="1"') + '>No end date</button>' +
+    (act ? '<button type="button" class="go" ' + a("endset") + (cal.iso ? '' : ' disabled') + '>Set</button>' : '') + '</div></div>';
+}
+/* The calendar after a pick or a month turned: its head, month and days drawn
+   again in place, Set waiting for a day, the focus on the day asked for. */
+function calRedraw(day) {
+  const box = document.querySelector(".pop .calx");
+  if (!box) return;
+  box.querySelector(".cald").innerHTML = calHead();
+  box.querySelector(".calm").textContent = monthWord();
+  const g = box.querySelector(".calg");
+  g.innerHTML = calGrid(); g.setAttribute("aria-label", monthWord());
+  const set = box.querySelector(".go");
+  if (set) set.disabled = !cal.iso;
+  const b = day && g.querySelector('[data-day="' + day + '"]');
+  if (b) b.focus({preventScroll: true});
+}
+/* A day or a step chosen: in the form it is the answer; elsewhere it waits for Set. */
+function calPick(iso) {
+  if (cal.form) { cmpEnd = iso; closeMenu(true); cmpEndDraw(); return; }
+  cal.iso = iso;
+  if (iso) cal.month = iso.slice(0, 7);
+  calRedraw(iso);
+}
+const calTurn = (iso, months) => { const y = +iso.slice(0, 4), m = +iso.slice(5, 7) - 1 + months, last = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
+  return new Date(Date.UTC(y, m, Math.min(+iso.slice(8, 10), last))).toISOString().slice(0, 10); };
+/* The Add proxies form's end date: kept here until the batch is sent. */
+let cmpEnd = "";
+function cmpEndDraw() {
+  const f = el("f-end");
+  f.querySelector(".dv").textContent = cmpEnd ? fullWord(cmpEnd) : "No end date";
+  f.classList.toggle("set", !!cmpEnd);
+  el("f-endw").textContent = cmpEnd ? endAway(cmpEnd) : "";
+  renderRead();
+}
+/* When a group's proxies do not share one date, a quiet line says how they
+   stand now; the date set goes to every one. */
+const endsVary = en => !en.one && en.first ? '<small class="en">' + (en.first === en.last ? esc(dateWord(en.first)) + ' now, ' + en.none + ' without a date'
+  : 'Now ' + esc(dateWord(en.first)) + ' to ' + esc(dateWord(en.last)) + (en.none ? ', ' + en.none + ' without a date' : '')) + '</small>' : '';
+/* A batch's end date, from its menu: every proxy of it at once. */
+function batchEnds(key) {
+  const f = famList().find(x => x.key === key);
+  if (!f) return "";
+  return '<span class="mh"><b>' + esc(f.label) + '</b><small>' + f.ex.length + (f.ex.length === 1 ? ' proxy' : ' proxies') + ', all at once</small></span>' +
+    endDialog(endFirst(f.end), 'data-bdo="%" data-key="' + esc(key) + '"', "Ends on", endsVary(f.end));
+}
+/* The ticked proxies' end date, from the selection bar. */
+function selEnds() {
+  const sel = EX.filter(e => ticked.has(e.id)), en = endsOf(sel);
+  return '<span class="mh"><b>' + sel.length + ' selected</b><small>one end date for all of them</small></span>' +
+    endDialog(endFirst(en), 'data-bulk="%"', "Ends on", endsVary(en));
 }
 /* The switch: the whole batch in play, or set aside. Free proxies leave the
    shelf now and set-aside or dead ones are tested back onto it; one on a
@@ -536,8 +699,9 @@ function batchDo(kind, key) {
     say("The " + ids.size + (ids.size === 1 ? " proxy" : " proxies") + " of " + f.label + (ids.size === 1 ? " is" : " are") + " ticked; the bar below acts on them.");
     return;
   }
+  const what = kind === "capset" ? "cap:" + capFrom(el("pop-cap")) : kind === "endset" ? "ends:" + cal.iso : kind;
   menu = "";
-  apply(kind === "capset" ? "cap:" + capFrom(el("pop-cap")) : kind, ids, f.label, false, key);
+  apply(what, ids, f.label, false, key);
 }
 function renderSel() {
   const host = el("sel");
@@ -552,6 +716,7 @@ function renderSel() {
     '<span>In play<small class="tab">' + on + ' of ' + sel.length + '</small></span></span>' +
     '<button class="act" type="button" data-bulk="lane:gpt">Keep for GPT</button><button class="act" type="button" data-bulk="lane:spotify">Keep for Spotify</button>' +
     '<button class="act" type="button" data-bulk="cap:2">Cap 2/day</button><button class="act" type="button" data-bulk="cap:0">No cap</button>' +
+    '<button class="act' + (menu === "sel:ends" ? " on" : "") + '" type="button" data-menu="sel:ends" aria-haspopup="dialog" aria-expanded="' + (menu === "sel:ends") + '">' + SVG(ICON.cal, 1.9) + 'End date</button>' +
     '<button class="act" type="button" data-bulk="test">Test</button><button class="act bad" type="button" data-bulk="remove">Remove</button>' +
     '<button class="xs" type="button" data-bulk="clear" aria-label="Clear the selection">' + SVG(ICON.cross, 2.2) + '</button>';
   const bar = host.querySelector(".sel");
@@ -667,6 +832,7 @@ function told(kind, rows, by, who) {
     words = waits && waits === n ? "set aside once " + pl("its phone goes", "their phones go") : "set aside" + (waits ? ", " + (waits === 1 ? "1 of them once its phone goes" : waits + " of them once their phones go") : "");
   } else if (kind.startsWith("lane:")) { const l = kind.slice(5); words = l ? "kept for " + laneWord(l) : "opened to either lane"; }
   else if (kind.startsWith("cap:")) { const c = +kind.slice(4); words = c ? "capped at " + c + " a day" : "uncapped"; }
+  else if (kind.startsWith("ends:")) { const d = kind.slice(5); words = d ? pl("ends", "end") + " on " + dateWord(d) : pl("has", "have") + " no end date now"; }
   else if (kind === "test") words = "being tested; the address " + pl("it", "each") + " comes out at is read";
   else words = "removed to the archive";
   const one = who ? who + ": " + n + pl(" proxy", " proxies") : rows.length === 1 ? nameText(rows[0]) : n + pl(" proxy", " proxies");
@@ -741,17 +907,19 @@ function drawerHtml(e) {
   const lines = [["Comes out at", e.ip ? e.ip + " \u00b7 " + (e.cc || "?") + (e.isp ? " \u00b7 " + e.isp : "") : "not read yet", 0],
     ["Today", e.today + " phone" + (e.today === 1 ? "" : "s") + (e.cap ? " of " + e.cap + " a day" : ", no cap"), 0],
     ["Added", (stamp(e.added) || "\u2014") + (e.batch ? " \u00b7 " + e.n : ""), 0],
+    ["Ends", e.exp ? dateWord(e.exp) + " \u00b7 " + endLeft(e.exp) : "no end date", 0],
     ["Endpoint", e.end, 1], ["Username", e.user || "none", e.user ? 1 : 0], ["Password", e.user ? "\u2022".repeat(14) : "none", 0], ["Type", "SOCKS5", 0]];
   const why = e.s === "phone" ? (e.serial ? "On phone " + e.serial : "On a phone") + (e.after ? "; set aside once that phone goes." : ".") : (e.note || "");
+  const life = (e.batch ? esc(stamp(e.added)) : "") + (e.exp ? (e.batch ? " \u2013 " : "until ") + endHtml(e.exp) : "");
   return '<header><span class="id"><b>' + (e.batch ? esc([e.seller, e.type].filter(Boolean).join(" ")) + ' <i>#' + e.k + '</i>' : esc(e.n)) + '</b>' +
-    '<span class="row">' + psw(e) + pill(e) + '<span class="lane">' + tile(e.lane, true) + '<b>' + laneWord(e.lane) + '</b></span>' + (e.batch ? '<span class="ty2">' + esc(stamp(e.added)) + '</span>' : '') + '</span>' +
+    '<span class="row">' + psw(e) + pill(e) + '<span class="lane">' + tile(e.lane, true) + '<b>' + laneWord(e.lane) + '</b></span>' + (life ? '<span class="ty2">' + life + '</span>' : '') + '</span>' +
     (why ? '<small class="why">' + esc(why) + '</small>' : '') + '</span>' +
     '<button class="xbtn" type="button" data-close="1" aria-label="Close">' + SVG(ICON.cross, 2.2) + '</button></header><div class="body">' +
     '<h3>What operators pressed \u00b7 ' + range + (n ? '<small>' + n + ' phone' + (n === 1 ? '' : 's') + '</small>' : '') + '</h3>' + pressed +
     '<h3>Rounds' + (rsum ? '<small>' + rsum + '</small>' : '') + '</h3>' +
     (us.length ? '<div class="rtl">' + tl + '</div>' + (us.length > SHOW ? '<div class="rmore">and ' + (us.length - SHOW) + ' earlier uses</div>' : '') : '<div class="rmore">Not used yet.</div>') +
     '<h3>Details</h3><div class="lines">' + lines.map(([k, val, c]) => '<div class="l1' + (c ? " copy" : "") + '"' + (c ? ' data-copy="' + esc(val) + '" role="button" tabindex="0"' : '') + '><span class="k">' + k + '</span><span class="v">' + esc(val) + '</span>' + (c ? '<span class="cp">' + SVG(ICON.copy, 1.8) + '</span>' : '<span></span>') + '</div>').join("") + '</div></div>' +
-    '<footer>' + doors(e) + '</footer><span class="sr" role="status" aria-live="polite"></span>';
+    '<footer>' + doors(e, true) + '</footer><span class="sr" role="status" aria-live="polite"></span>';
 }
 /* ------------------------------------------------------------- add proxies */
 /* A line as vendors send it: host:port:user:pass, user:pass@host:port, or a
@@ -817,7 +985,7 @@ function renderRead() {
   const box = el("cmp-read");
   box.hidden = !rows.length;
   box.innerHTML = !rows.length ? "" : '<span class="rh"><b class="ok">' + good.length + ' read</b>' + (bad ? '<b class="bad">' + bad + ' left out</b>' : '') +
-    (!good.length ? '' : b.seller ? '<span class="to">' + esc(b.label) + '</span>' : '<span class="need">' + (el("f-seller").value.trim() ? "Write the seller in Latin letters or digits" : "Name the seller to name them") + '</span>') + '</span><ul>' +
+    (!good.length ? '' : b.seller ? '<span class="to">' + esc(b.label) + (cmpEnd ? " \u2013 " + esc(dateWord(cmpEnd)) : "") + '</span>' : '<span class="need">' + (el("f-seller").value.trim() ? "Write the seller in Latin letters or digits" : "Name the seller to name them") + '</span>') + '</span><ul>' +
     rows.slice(0, SHOW).map(r => r.x
       ? '<li class="ok">' + SVG(ICON.tick, 3) + '<span class="hp">' + esc(r.x.host + ":" + r.x.port) + '</span><span class="u">' + esc(r.x.user || "no login") + (r.x.type ? " \u00b7 " + r.x.type : "") + '</span><span class="to">' + (b.seller ? "#" + (++k) : "\u2014") + '</span></li>'
       : '<li class="bad">' + SVG(ICON.cross, 3) + '<span class="hp">' + esc(r.raw) + '</span><span class="u">line ' + r.line + ' ' + r.why + '</span></li>').join("") +
@@ -866,12 +1034,12 @@ el("cmp").addEventListener("submit", ev => {
   if (!b.seller) { el("f-seller").focus(); return; }
   const lane = el("lanepick").querySelector('[aria-checked="true"]').dataset.pick;
   sending = true; renderRead();
-  send("/pools/proxy/add-batch", {lines: good.map(r => wire(r.x)).join("\n"), seller: b.seller, type: b.type, lane, cap: capFrom(el("f-cap"))}).then(a => {
+  send("/pools/proxy/add-batch", {lines: good.map(r => wire(r.x)).join("\n"), seller: b.seller, type: b.type, lane, cap: capFrom(el("f-cap")), ends: cmpEnd}).then(a => {
     sending = false;
     if (!a.ok) { renderRead(); say(a.note || "Nothing was added."); return; }
     // What was not understood stays in the field, to be mended or cleared.
     el("paste").value = rows.filter(r => !r.x).map(r => r.raw).join("\n");
-    if (!bad) { el("f-seller").value = ""; el("f-type").value = ""; }
+    if (!bad) { el("f-seller").value = ""; el("f-type").value = ""; cmpEnd = ""; cmpEndDraw(); }
     adding = {n: good.length, label: b.label, key: b.key, bad, known: new Set(EX.map(e => e.id))};
     jobs.push({kind: "add", at: Date.now(), items: [{req: a.req, open: true}], add: adding});
     closeCmp(true); renderRead(); poll(1500);
@@ -899,11 +1067,25 @@ document.addEventListener("paste", ev => {
 /* A switch slides under the finger first; the rows are drawn again after. */
 function closeMenu(back) {
   if (!menu) return;
-  menu = ""; renderPop();
-  document.querySelectorAll(".doors button.on,.bm.on,.sortb.on").forEach(b => b.classList.remove("on"));
+  menu = ""; menuAt = null; renderPop();
+  document.querySelectorAll(".doors button.on,.cell.on,.bm.on,.sortb.on,.act.on,.datef.on").forEach(b => b.classList.remove("on"));
   document.querySelectorAll('[data-menu][aria-expanded="true"]').forEach(b => b.setAttribute("aria-expanded", "false"));
   if (back && menuFrom && menuFrom.isConnected) menuFrom.focus({preventScroll: true});
   menuFrom = null;
+}
+/* A dialog opened from a button that is not its door - a row's More, for
+   the end date - stays where that button is, and the focus goes back to it. */
+function openMenuAt(key, from) {
+  closeMenu();
+  menu = key; menuFrom = from; menuAt = from;
+  if (from) { from.classList.add("on"); from.setAttribute("aria-expanded", "true"); }
+  renderPop();
+  popFocus();
+}
+/* The focus inside a menu just opened: the calendar's day, or its first choice. */
+function popFocus() {
+  const f = document.querySelector('.pop .calg [tabindex="0"]') || document.querySelector(".pop button,.pop input");
+  if (f) f.focus({preventScroll: true});
 }
 /* The list, its tools and the selection bar move together. */
 function renderList() { renderTools(); renderRows(); renderSel(); }
@@ -925,26 +1107,41 @@ function slide(sw, on, then) {
 function onClick(ev) {
   const t = ev.target;
   if (menu && !t.closest(".pop") && !t.closest("[data-menu]")) closeMenu();
-  if (cmpOpen && !t.closest("#addbox")) closeCmp();
+  if (cmpOpen && !t.closest("#addbox") && !t.closest(".pop")) closeCmp();
   if (t.closest("#cmpc")) { openCmp(); return; }
   const cm = t.closest("[data-cmp]");
   if (cm) { if (cm.dataset.cmp === "clear") { el("paste").value = ""; renderRead(); el("paste").focus(); } else closeCmp(true); return; }
   const stp = t.closest("[data-step]");
   if (stp) { const box = stp.parentElement, inp = box.querySelector("input"); inp.value = String(capFrom(inp) + +stp.dataset.step); capWord(box); return; }
+  // The calendar: a step is so many days later than the chosen date - a
+  // renewal carries on from the old end - or than today, when there is none
+  // or it has passed; a day is picked; a month turned.
+  const qd = t.closest("[data-qd]");
+  if (qd) { const today = dayNo(DAY.iso); calPick(isoOf((cal.iso && dayNo(cal.iso) > today ? dayNo(cal.iso) : today) + +qd.dataset.qd)); return; }
+  const dy = t.closest("[data-day]");
+  if (dy) { calPick(dy.dataset.day); return; }
+  const cn = t.closest("[data-cal]");
+  if (cn) { cal.month = calTurn(cal.month + "-01", +cn.dataset.cal).slice(0, 7); calRedraw(); return; }
+  if (t.closest("[data-cmpend]")) { calPick(""); return; }
   if (t.classList.contains("scrim") || t.closest("[data-close]")) { closeLayer(); return; }
   const mn = t.closest("[data-menu]");
   if (mn) {
     if (menu === mn.dataset.menu) { closeMenu(); return; }
     closeMenu();
-    menu = mn.dataset.menu; menuFrom = mn; mn.classList.add("on"); mn.setAttribute("aria-expanded", "true"); renderPop();
+    menu = mn.dataset.menu; menuFrom = mn; menuAt = null; mn.classList.add("on"); mn.setAttribute("aria-expanded", "true"); renderPop();
     // Opened from the keyboard, the menu takes the focus.
-    if (!ev.detail) { const first = document.querySelector(".pop button,.pop input"); if (first) first.focus(); }
+    if (!ev.detail) popFocus();
     return;
   }
   const sw = t.closest("[data-bsw]");
   if (sw) { if (sw.classList.contains("busy")) return; const on = sw.getAttribute("aria-checked") !== "true"; slide(sw, on, () => setBatch(sw.dataset.bsw, on)); return; }
   const ps = t.closest("[data-psw]");
   if (ps) { if (ps.classList.contains("busy")) return; const on = ps.getAttribute("aria-checked") !== "true"; slide(ps, on, () => apply(on ? "free" : "aside", new Set([+ps.dataset.psw]))); return; }
+  // A row's More, End date: the date dialog in its place, from the same button.
+  const ed = t.closest("[data-ends]");
+  if (ed) { openMenuAt(ed.dataset.ends + ":ends", menuFrom); return; }
+  const be = t.closest("[data-bends]");
+  if (be) { openMenuAt("e|" + be.dataset.bends, menuFrom); return; }
   const bd = t.closest("[data-bdo]");
   if (bd) {
     const from = menuFrom && menuFrom.getAttribute("data-menu");
@@ -957,7 +1154,7 @@ function onClick(ev) {
   if (d) {
     const id = +d.dataset.id, k = d.dataset.do, from = menuFrom && menuFrom.getAttribute("data-menu");
     if (k === "story") { const back = menuFrom; closeMenu(); openDrawer(id, back); return; }
-    apply(k === "capset" ? "cap:" + capFrom(el("pop-cap")) : k, new Set([id]));
+    apply(k === "capset" ? "cap:" + capFrom(el("pop-cap")) : k === "endset" ? "ends:" + cal.iso : k, new Set([id]));
     redrawDrawer();
     // Chosen from the keyboard, the focus goes back to the door that opened the menu.
     if (from && !ev.detail) refocus('[data-menu="' + from + '"]');
@@ -984,7 +1181,7 @@ function onClick(ev) {
   if (bk) {
     if (bk.dataset.bulk === "clear") { ticked.clear(); renderRows(); renderSel(); }
     else if (bk.dataset.keep) { if (bk.classList.contains("busy")) return; const kind = bk.dataset.bulk; slide(bk, kind === "free", () => apply(kind, new Set(ticked))); }
-    else apply(bk.dataset.bulk, new Set(ticked), "", true);
+    else apply(bk.dataset.bulk === "endset" ? "ends:" + cal.iso : bk.dataset.bulk, new Set(ticked), "", true);
     return;
   }
   const cp = t.closest("[data-copy]");
@@ -1010,8 +1207,8 @@ document.addEventListener("click", ev => {
 });
 document.addEventListener("keydown", ev => {
   if (ev.key === "Escape") {
-    if (cmpOpen) { closeCmp(true); return; }
     if (menu) { closeMenu(true); return; }
+    if (cmpOpen) { closeCmp(true); return; }
     closeLayer();
     return;
   }
@@ -1035,7 +1232,8 @@ document.addEventListener("keydown", ev => {
   // The drawer keeps Tab inside itself and its open menu, round and round.
   const draw = el("layer").querySelector(".draw");
   if (draw && ev.key === "Tab") {
-    const f = [...draw.querySelectorAll("button,[tabindex='0'],input")].filter(x => !x.disabled && (x.offsetParent !== null || x.closest(".pop")));
+    // A calendar's other days are reached by the arrows, not by Tab.
+    const f = [...draw.querySelectorAll("button,[tabindex='0'],input")].filter(x => !x.disabled && x.getAttribute("tabindex") !== "-1" && (x.offsetParent !== null || x.closest(".pop")));
     if (!f.length) return;
     ev.preventDefault();
     const i = f.indexOf(document.activeElement);
@@ -1044,6 +1242,16 @@ document.addEventListener("keydown", ev => {
   }
   if (ev.key === "Enter" && (ev.ctrlKey || ev.metaKey) && cmpOpen) { ev.preventDefault(); el("cmp-add").click(); return; }
   if (ev.key === "Enter" && ev.target.id === "pop-cap") { ev.preventDefault(); const set = document.querySelector('[data-do="capset"],[data-bdo="capset"]'); if (set) set.click(); return; }
+  // In the calendar the arrows walk the days, and Page Up and Down the months.
+  const dd = ev.target.matches && ev.target.matches("[data-day]") && ev.target.dataset.day;
+  const by = {ArrowLeft: -1, ArrowRight: 1, ArrowUp: -7, ArrowDown: 7}[ev.key];
+  if (dd && (by || ev.key === "PageUp" || ev.key === "PageDown")) {
+    ev.preventDefault();
+    const to = by ? isoOf(dayNo(dd) + by) : calTurn(dd, ev.key === "PageDown" ? 1 : -1);
+    cal.month = to.slice(0, 7);
+    calRedraw(to);
+    return;
+  }
   // What is drawn as a button answers Enter and Space like one.
   if ((ev.key === "Enter" || ev.key === " ") && ev.target.matches && ev.target.matches("[data-copy],[data-open],th.sortable")) { ev.preventDefault(); ev.target.click(); }
 });
@@ -1051,7 +1259,7 @@ document.addEventListener("keydown", ev => {
    unless someone is typing in its box: a phone's keyboard scrolls the page
    as it opens. */
 document.addEventListener("scroll", () => {
-  const typing = document.activeElement && document.activeElement.matches && document.activeElement.matches(".pop input");
+  const typing = document.activeElement && document.activeElement.matches && document.activeElement.matches(".pop input, .pop .calx button");
   if (menu && !typing) closeMenu();
 }, {capture: true, passive: true});
 /* A menu belongs where its button was; a resize moves the button. */
@@ -1096,7 +1304,7 @@ function load(d) {
 }
 /* A state the page was not asked for - the farm moving on its own: drawn,
    and every proxy that changed glows once. */
-const sig = e => [e.s, e.after, e.serial, e.today, e.lane, e.cap, e.ip, (e.u || []).length].join("|");
+const sig = e => [e.s, e.after, e.serial, e.today, e.lane, e.cap, e.ip, e.exp, (e.u || []).length].join("|");
 function take(d) {
   const was = new Map(EX.map(e => [e.id, sig(e)])), fk = focusKey(document.activeElement);
   load(d);
@@ -1246,7 +1454,7 @@ function countUp(node, to, ms) {
 load(DATA);
 drawnText = JSON.stringify(DATA);
 renderAll();
-renderRead();
+cmpEndDraw();
 document.querySelectorAll(".donut .num, .lr b").forEach(b => countUp(b, +b.textContent, 900));
 setTimeout(() => document.querySelector("main").classList.remove("boot"), 1500);
 poll(20000);

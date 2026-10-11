@@ -1158,3 +1158,9 @@ ALTER TABLE signins   ADD COLUMN IF NOT EXISTS stage    text NOT NULL DEFAULT ''
 -- "Refused since its last fix" asks the sign-ins of one address after a
 -- moment, under the row locks of a press.
 CREATE INDEX IF NOT EXISTS signins_gmail ON signins (gmail, at);
+
+-- rev 46: when a proxy ends (2026-10-11). The day its seller stops it, set
+-- on the Proxies page - for a batch as it is added, for a batch or the
+-- ticked proxies at once, or for one. A date to read: the farm hands a
+-- proxy out the same before and after it. NULL is no end date.
+ALTER TABLE resources ADD COLUMN IF NOT EXISTS expires_on date;

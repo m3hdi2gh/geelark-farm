@@ -1604,7 +1604,10 @@ class _Handler(BaseHTTPRequestHandler):
                              "type": str(field.get("type") or ""),
                              "tag": now.strftime("%d")
                              + proxies_read.MONTHS[now.month - 1]},
-                   "cap": str(field.get("cap") or "0")}
+                   "cap": str(field.get("cap") or "0"),
+                   # When the batch ends, from the page's calendar; the
+                   # verb refuses one that is not a day (rev 46).
+                   "ends": str(field.get("ends") or "").strip()}
         out = self._proxy_press(user, "add_proxies", payload)
         return self._json(200, dict(out, ok=out["said"] in (
             "queued", "pending", "done")))
@@ -4244,7 +4247,8 @@ _TESTED_TOGETHER = {"mark_proxy_free": "free_proxies",
                     "test_proxy": "test_proxies"}
 
 #: What a press of the Proxies page may ask (`_proxy_verb`).
-_PROXY_PRESS = re.compile(r"free|aside|test|remove|lane:(?:gpt|spotify)?|cap:\d{1,2}")
+_PROXY_PRESS = re.compile(r"free|aside|test|remove|lane:(?:gpt|spotify)?|cap:\d{1,2}"
+                          r"|ends:(?:\d{4}-\d{2}-\d{2})?")
 
 
 def _proxy_verb(what: str, e: dict) -> tuple[str | None, dict]:
@@ -4270,6 +4274,11 @@ def _proxy_verb(what: str, e: dict) -> tuple[str | None, dict]:
     if what.startswith("cap:"):
         cap = min(99, int(what[4:]))
         return ("cap_proxy", {"cap": cap}) if e["cap"] != cap else (None, {})
+    if what.startswith("ends:"):
+        # When it ends, or "" for none: a date to read (rev 46).
+        day = what[5:]
+        return (("end_proxy", {"ends": day}) if (e.get("exp") or "") != day
+                else (None, {}))
     if what == "test":
         return "test_proxy", {}
     if what == "remove":

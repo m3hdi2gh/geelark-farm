@@ -33,7 +33,7 @@ def _row(pid, name, status="free", serial="", **more) -> dict:
            "username": f"u{pid}", "status": status, "serial": serial,
            "last_exit_ip": "", "note": "", "error": None, "purpose": "",
            "uses_per_day": None, "day_uses": 0, "day_uses_on": None,
-           "created_at": _t(1, 8), "source": "web"}
+           "created_at": _t(1, 8), "source": "web", "expires_on": None}
     row.update(more)
     return row
 
@@ -169,9 +169,12 @@ def test_a_press_is_one_request_a_proxy_by_its_state(web, desk):
     _press(client, "/pools/proxy/do", what="cap:3", ids="7", press="p4")
     _press(client, "/pools/proxy/do", what="cap:0", ids="7", press="p5")
     _press(client, "/pools/proxy/do", what="test", ids="7", press="p6")
-    assert [(a["verb"], a["payload"].get("purpose", a["payload"].get("cap")))
-            for a in desk] == [("keep_proxy_for", "gpt"), ("cap_proxy", 3),
-                               ("test_proxy", None)], "no cap is already no cap"
+    _press(client, "/pools/proxy/do", what="ends:2026-11-10", ids="7", press="p8")
+    _press(client, "/pools/proxy/do", what="ends:", ids="7", press="p9")
+    said = [(a["verb"], a["payload"].get("purpose", a["payload"].get("cap", a["payload"].get("ends"))))
+            for a in desk]
+    assert said == [("keep_proxy_for", "gpt"), ("cap_proxy", 3), ("test_proxy", None),
+                    ("end_proxy", "2026-11-10")], "no cap, or no end date, is already that"
     assert _press(client, "/pools/proxy/do", what="drop table", ids="7")["ok"] is False
 
 
@@ -180,7 +183,8 @@ def test_a_batch_goes_to_the_farm_to_be_tested_and_named_there(web, desk):
     client = web()
     client.login()
     answer = _press(client, "/pools/proxy/add-batch", lines="u:p@h.example:1\nh2:2",
-                    seller="Webshare", type="ISP", lane="gpt", cap="2", press="b1")
+                    seller="Webshare", type="ISP", lane="gpt", cap="2", ends="2026-11-10",
+                    press="b1")
     assert answer["ok"] and answer["said"] == "queued" and answer["req"] == 101
     (asked,) = desk
     now = datetime.datetime.now(proxies_read.TEHRAN)
@@ -191,6 +195,7 @@ def test_a_batch_goes_to_the_farm_to_be_tested_and_named_there(web, desk):
         "seller": "Webshare", "type": "ISP",
         "tag": now.strftime("%d") + proxies_read.MONTHS[now.month - 1]}
     assert (asked["payload"]["purpose"], asked["payload"]["cap"]) == ("gpt", "2")
+    assert asked["payload"]["ends"] == "2026-11-10", "the verb checks it is a day"
     refused = _press(client, "/pools/proxy/add-batch", lines="h:1", seller="!!")
     assert refused == {"ok": False, "note": "Name the seller to name them."}
     assert len(desk) == 1
@@ -219,17 +224,26 @@ def test_which_request_a_press_is_follows_the_state_drawn():
     assert verb("lane:spotify", free) == ("keep_proxy_for", {"purpose": "spotify"})
     assert verb("lane:", free) == (None, {}), "already on either lane"
     assert verb("cap:2", free) == ("cap_proxy", {"cap": 2})
+    ending = dict(free, exp="2026-11-10")
+    assert verb("ends:2026-11-10", free) == ("end_proxy", {"ends": "2026-11-10"})
+    assert verb("ends:2026-11-10", ending) == (None, {}), "already that day"
+    assert verb("ends:2026-12-01", ending) == ("end_proxy", {"ends": "2026-12-01"})
+    assert verb("ends:", ending) == ("end_proxy", {"ends": ""})
+    assert verb("ends:", free) == (None, {}), "no end date is already none"
     assert verb("remove", held) == ("remove_proxy", {}), "the verb refuses a phone's"
-    for word in ("free", "aside", "test", "remove", "lane:", "lane:gpt", "cap:0", "cap:99"):
+    for word in ("free", "aside", "test", "remove", "lane:", "lane:gpt", "cap:0", "cap:99",
+                 "ends:", "ends:2026-11-10"):
         assert app_mod._PROXY_PRESS.fullmatch(word), word
-    for word in ("cap:100", "lane:tiktok", "free ", "shelve"):
+    for word in ("cap:100", "lane:tiktok", "free ", "shelve", "ends:2026-1-1",
+                 "ends:10/11/2026", "ends:2026-11-10x", "ends:tomorrow"):
         assert not app_mod._PROXY_PRESS.fullmatch(word), word
 
 
 def test_the_reader_reads_uses_presses_ends_and_batches():
     pool = [_row(7, "Webshare-ISP-02Oct-3", "set aside", "5441", last_exit_ip="1.2.3.4",
                  note="the exit stays", purpose="gpt", uses_per_day=2, day_uses=1,
-                 day_uses_on=datetime.date(2026, 10, 2), created_at=_t(1, 20)),
+                 day_uses_on=datetime.date(2026, 10, 2), created_at=_t(1, 20),
+                 expires_on=datetime.date(2026, 11, 1)),
             _row(8, "TSP10", error="bad port"),
             _row(9, "X1", "one-off", source="one-off"),
             _row(10, "", "free"), _row(11, "CH1", "change ip", "5450")]
@@ -269,6 +283,7 @@ def test_the_reader_reads_uses_presses_ends_and_batches():
     assert (web_["ep"], web_["end"], web_["user"]) == ("h.example:1007:u7",
                                                         "H.example:1007", "u7")
     assert web_["added"] == "2026-10-01" and tsp["f"] == "TSP"
+    assert (web_["exp"], tsp["exp"]) == ("2026-11-01", ""), "a day, or none"
     assert got["issued"] == {"webshare|isp|02oct": 7}, "the archive's numbers count"
     assert got["since"] == {"t": "2026-10-02 00:00", "d": "2026-09-30 00:00", "a": ""}
     assert (got["track"], got["trackWord"]) == ("2026-10-01 00:00", "1 Oct")

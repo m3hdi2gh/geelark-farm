@@ -32,6 +32,7 @@
         <div class="orow">
           <span class="opt"><span class="k">Lane</span><span class="seg" id="lanepick" role="radiogroup" aria-label="Lane"><button type="button" role="radio" aria-checked="false" data-pick="gpt">GPT</button><button type="button" role="radio" aria-checked="false" data-pick="spotify">Spotify</button><button type="button" role="radio" aria-checked="true" data-pick="">Either</button></span></span>
           <span class="opt"><span class="k">Phones a day</span><span class="step"><button type="button" data-step="-1" aria-label="One phone fewer">&minus;</button><input id="f-cap" value="2" inputmode="numeric" autocomplete="off" aria-label="Phones a day, 0 for no cap"><button type="button" data-step="1" aria-label="One phone more">+</button><small>a day</small></span></span>
+          <span class="opt grow"><span class="k">Ends <i>optional</i></span><button type="button" class="datef" id="f-end" data-menu="cmp:ends" aria-haspopup="dialog" aria-expanded="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15.5" rx="2.5"/><path d="M3.5 10h17M8 3v4M16 3v4"/></svg><span class="dv">No end date</span><small class="dl" id="f-endw"></small><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button></span>
         </div>
       </div>
       <footer><small>Each one is tested before it joins, and the address it comes out at is read. One that does not answer joins as dead and is tested again on its own.</small>
@@ -51,7 +52,7 @@
   </section>
 
   <section aria-labelledby="h-fam">
-    <div class="sh"><h2 id="h-fam">Batches</h2><small>One card a batch: its seller, its type and the day it came. Round is how many phones its typical proxy has carried; the bar runs from its least- to its most-used proxy. The switch puts the whole batch in play or sets it aside; tap a card to see its proxies.</small><span class="sp"></span><small id="famsum"></small></div>
+    <div class="sh"><h2 id="h-fam">Batches</h2><small class="hint">Round is how many phones its typical proxy has carried. Tap a card to see its proxies; its switch puts the whole batch in or out of play.</small><span class="sp"></span><small id="famsum"></small></div>
     <div class="fams" id="fams"></div>
   </section>
 

@@ -1228,6 +1228,14 @@ class ProxyPool(Pool):
         """A person's daily cap for one exit; 0 takes the cap away."""
         self._set(resource, {self.daily_cap_column: str(cap) if cap > 0 else ""})
 
+    #: The day its seller stops it, "YYYY-MM-DD"; blank for none (rev 46).
+    end_column = "Ends on"
+
+    def set_end(self, resource: Resource, day: str) -> None:
+        """A person's end date for one exit; "" takes it away. A date to
+        read: nothing the pool hands out changes with it."""
+        self._set(resource, {self.end_column: day})
+
     def unshelve(self, resource: Resource, *, note: str = "") -> None:
         """A person's set-aside undone: stock again. `release` keeps the
         shelf on purpose (the phone that was on it going is not the

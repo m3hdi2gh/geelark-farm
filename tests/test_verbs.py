@@ -2143,8 +2143,8 @@ def test_which_verbs_run_inline_is_written_down_and_not_only_derived():
         "ignore_proxy", "remove_proxy", "shelve_proxy", "keep_proxy_for",
         "shelve_all_proxies",
         # The Proxies page's daily cap and its switch on a proxy a phone
-        # still carries (2026-10-02).
-        "cap_proxy", "unshelve_proxy",
+        # still carries (2026-10-02), and when a proxy ends (2026-10-11).
+        "cap_proxy", "unshelve_proxy", "end_proxy",
         # The buttons an operator presses all day.
         "set_phone_state", "clear_tries", "stop_phone", "build_by_hand",
         # The Station's give-back and call-off (2026-09-29).
@@ -2545,7 +2545,7 @@ def test_a_batch_is_named_on_past_the_pool_and_the_archive(monkeypatch):
     from tests.test_pools import PROXY_HEADERS
 
     book = make_book(proxies=0, proxy_headers=PROXY_HEADERS
-                     + ["Purpose", "Uses per day"])
+                     + ["Purpose", "Uses per day", "Ends on"])
     verbs.add_proxies(book, None, None, {"rows": [
         {"raw": "1.2.3.1:9999:u:p", "name": "Webshare-ISP-02Oct-2"}]}, None)
     import contextlib
@@ -2566,7 +2566,7 @@ def test_a_batch_is_named_on_past_the_pool_and_the_archive(monkeypatch):
         {"rows": [{"raw": "1.2.3.2:9999:u:p", "name": "ignored"},
                   {"raw": "1.2.3.3:9999:u:p", "name": ""},
                   {"raw": "1.2.3.1:9999:u:p", "name": ""}],
-         "purpose": "gpt", "cap": "2",
+         "purpose": "gpt", "cap": "2", "ends": "2026-11-01",
          "batch": {"seller": "Web share!", "type": "ISP", "tag": "02Oct"}},
         object())
     assert asked == ["Webshare-ISP-02Oct"]
@@ -2576,14 +2576,55 @@ def test_a_batch_is_named_on_past_the_pool_and_the_archive(monkeypatch):
     assert "1 already in the pool" in said
     first = book.proxies.find_by_name("Webshare-ISP-02Oct-6")
     assert first.values["Uses per day"] == "2"
+    assert first.values["Ends on"] == "2026-11-01", "the batch's end date rides along"
     assert book.proxies.purpose_of(first) == "gpt"
     dead = book.proxies.find_by_name("Webshare-ISP-02Oct-7")
     assert book.proxies.status_of(dead) == "dead"
+    assert dead.values["Ends on"] == "2026-11-01", "a dead one ends the same day"
     # A batch without a seller, or a day that is not one, is refused whole.
     for batch in ({"seller": "", "tag": "02Oct"}, {"seller": "W", "tag": "2 Oct"}):
         assert verbs.add_proxies(book, None, None, {
             "rows": [{"raw": "1.2.3.9:9999:u:p"}], "batch": batch},
             None)[0] == "refused"
+    # So is one whose end date is not a day - before anything is tested.
+    held = len(book.proxies._rows)
+    status, said, _ = verbs.add_proxies(book, None, None, {
+        "rows": [{"raw": "1.2.3.9:9999:u:p"}], "ends": "2026-02-30",
+        "batch": {"seller": "W", "tag": "02Oct"}}, None)
+    assert status == "refused" and "not a day" in said and "nothing was added" in said
+    assert len(book.proxies._rows) == held
+
+
+def test_an_end_date_is_set_and_taken_away_by_name():
+    book, row = _one_proxy("Ends on")
+    status, said, detail = verbs.end_proxy(
+        book, None, None, {"name": "SX1", "ends": "2026-11-10"}, None)
+    assert (status, detail) == ("done", {"ends": "2026-11-10"})
+    assert said == "SX1 ends on 10 Nov 2026"
+    assert row.values["Ends on"] == "2026-11-10"
+    status, said, detail = verbs.end_proxy(book, None, None,
+                                           {"name": "SX1", "ends": ""}, None)
+    assert (status, detail) == ("done", {"ends": ""}) and "no end date" in said
+    assert row.values["Ends on"] == ""
+    # Only a real day of this century: the calendar sends nothing else.
+    for wrong in ("2026-02-30", "10/11/2026", "20261110", "2026-W45-2",
+                  "2026-11-10T00:00", "1999-12-31", "2100-01-01", "soon"):
+        status, said, _ = verbs.end_proxy(book, None, None,
+                                          {"name": "SX1", "ends": wrong}, None)
+        assert status == "refused" and "not a day" in said, wrong
+    assert row.values["Ends on"] == "", "a refusal writes nothing"
+    assert verbs.end_proxy(book, None, None, {"name": "nope", "ends": "2026-11-10"},
+                           None)[0] == "failed"
+    assert verbs.runs_inline("end_proxy"), "pools only: the web runs it"
+
+
+def test_an_end_date_is_a_day_in_the_store_and_blank_is_none():
+    from geelark_farm.store.pgpool import PgProxyPool, _to_db
+
+    assert PgProxyPool.COLUMNS["Ends on"] == "expires_on"
+    assert _to_db("expires_on", "") is None
+    assert _to_db("expires_on", None) is None
+    assert _to_db("expires_on", "2026-11-10") == "2026-11-10"
 
 
 def test_free_takes_a_set_aside_exit_off_the_shelf(monkeypatch, make_settings):

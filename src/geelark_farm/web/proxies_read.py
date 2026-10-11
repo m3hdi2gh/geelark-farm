@@ -53,6 +53,13 @@ def local(when) -> str:
     return when.astimezone(TEHRAN).strftime("%Y-%m-%d %H:%M")
 
 
+def _day(when) -> str:
+    """A date column as "YYYY-MM-DD", "" for none."""
+    if not when:
+        return ""
+    return (when.isoformat() if hasattr(when, "isoformat") else str(when))[:10]
+
+
 def _word(iso: str) -> str:
     """"2026-09-29" as "29 Sep"."""
     return f"{int(iso[8:10])} {MONTHS[int(iso[5:7]) - 1]}" if len(iso) >= 10 else ""
@@ -202,6 +209,8 @@ def assemble(pool, signins, moves, phones, presses, *, geo: dict,
              "isp": str(place.get("isp") or ""),
              "note": _proxy_words(str(r.get("note") or ""))[:240],
              "added": local(r.get("created_at"))[:10],
+             # When it ends, "YYYY-MM-DD", "" for none (rev 46).
+             "exp": _day(r.get("expires_on")),
              "ep": f"{host.lower()}:{r.get('port') or ''}:{r.get('username') or ''}",
              "end": f"{host}:{r.get('port') or ''}",
              "user": str(r.get("username") or ""),
@@ -231,7 +240,7 @@ def assemble(pool, signins, moves, phones, presses, *, geo: dict,
 
 _POOL = ("SELECT id, proxy_name, host, port, username, status, serial,"
          " last_exit_ip, note, error, purpose, uses_per_day, day_uses,"
-         " day_uses_on, created_at, source"
+         " day_uses_on, created_at, source, expires_on"
          " FROM resources WHERE kind = 'proxy'")
 _SIGNINS = ("SELECT proxy_name, at, ok, serial, coalesce(exit_ip, '') AS exit_ip"
             " FROM signins WHERE coalesce(proxy_name, '') <> ''")

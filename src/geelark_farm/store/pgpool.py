@@ -41,6 +41,8 @@ _BOOLS = frozenset({"email_code_only", "customer_ready"})
 #: Today, the way the daily exit cap counts days (rev 44).
 TODAY = "(now() AT TIME ZONE 'Asia/Tehran')::date"
 _STAMPS = frozenset({"claimed_at", "updated_at", "state_changed_at"})
+#: Columns that hold a day, "YYYY-MM-DD"; blank is NULL (rev 46).
+_DATES = frozenset({"expires_on"})
 
 
 def _to_db(column: str, value):
@@ -56,7 +58,7 @@ def _to_db(column: str, value):
             return 0
     if column in _BOOLS:
         return str(value).strip().upper() == "TRUE"
-    if column in _STAMPS:
+    if column in _STAMPS or column in _DATES:
         text = str(value or "").strip()
         return text or None
     return "" if value is None else str(value)
@@ -974,6 +976,9 @@ class PgProxyPool(_PgPool, ProxyPool):
         "Uses per day": "uses_per_day",
         "Uses today": "day_uses",
         "Uses on": "day_uses_on",
+        # When it ends - the day its seller stops it - blank for none
+        # (rev 46). A date to read; nothing the pool hands out reads it.
+        "Ends on": "expires_on",
     }
 
     def held_back(self) -> tuple[str, tuple]:
