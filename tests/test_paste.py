@@ -83,6 +83,22 @@ def test_a_two_column_line_keeps_its_password_instead_of_calling_it_a_key():
     assert "could not tell the password" in row["error"]
 
 
+def test_a_password_in_both_cases_is_never_taken_for_a_key():
+    """A key comes in one case. A Gmail sold with a password alone, its
+    sixteen letters and digits in both cases, was refused as "could not
+    tell the password from the 2fa key" - and no column order could add it
+    (2026-10-11)."""
+    from geelark_farm.web import paste
+
+    (row,) = paste.accounts("seller1@gmail.com Mx4QpTr7KdZ2wLbN")
+    assert (row["password"], row["secret"]) == ("Mx4QpTr7KdZ2wLbN", "")
+    assert not row.get("error")
+    # With a key after it, each is still what it is.
+    (row,) = paste.accounts("seller2@gmail.com\tMx4QpTr7KdZ2wLbN\tjbswy3dpehpk3pxp")
+    assert (row["password"], row["secret"]) == ("Mx4QpTr7KdZ2wLbN", "JBSWY3DPEHPK3PXP")
+    assert not row.get("error")
+
+
 def test_the_key_is_taken_from_the_end_of_the_line_not_the_start():
     from geelark_farm.web import paste
 

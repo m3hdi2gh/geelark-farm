@@ -1193,7 +1193,7 @@ function saveEdit(fixed) {
    address for the password (2026-10-11). A test runs both readers over
    the same lines. A line splits on tabs (a sheet's copy), else commas,
    else spaces; the address is the piece with an @, the key the last piece
-   shaped like base32 (or four or more spaced groups of four), a second
+   shaped like base32 in one case (or four or more spaced groups of four), a second
    address the recovery one, and the password the first piece left -
    wherever each sits. What this page adds: a line with no tab, comma or
    space splits on a seller's colons, bars or semicolons; a key may come
@@ -1202,6 +1202,9 @@ function saveEdit(fixed) {
 const KEYISH = /^[A-Z2-7]{16,}$/i, GROUP = /^[A-Z2-7]{4}$/i;
 const isMail = p => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(p);
 const B32 = /^[A-Za-z2-7 ]{16,}$/, DASHED = /^[A-Za-z2-7]{4}(?:-[A-Za-z2-7]{4}){3,}$/;
+/* Small and capital letters both: a password, never a key - a key comes in
+   one case (2026-10-11). */
+const bothCases = p => /[a-z]/.test(p) && /[A-Z]/.test(p);
 function splitLine(line) {
   const s = line.trim();
   const parts = s.includes("\t") ? s.split("\t") : s.includes(",") ? s.split(",") : /\s/.test(s) ? s.split(/\s+/) : s.split(/[:|;]/);
@@ -1223,7 +1226,7 @@ function parseLine(line) {
   let rest = parts.filter(p => !emails.includes(p));
   // The last base32-shaped piece: a password of sixteen plain letters is
   // base32-shaped too, and a seller's line puts the key after it.
-  const keys = rest.filter(p => B32.test(p) && !/^\d+$/.test(p));
+  const keys = rest.filter(p => B32.test(p) && !/^\d+$/.test(p) && !bothCases(p));
   let secret = keys.length ? keys[keys.length - 1] : "";
   rest = rest.filter(p => p !== secret);
   if (!secret) [secret, rest] = regroup(rest);

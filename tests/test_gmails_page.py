@@ -783,6 +783,8 @@ _PASTE = [
     "no address here\tPw",
     "a14@gmail.com\t123456789012345678",
     "  a15@gmail.com   Pw-15   ",
+    "a16@gmail.com Mx4QpTr7KdZ2wLbN",
+    "a17@gmail.com\tMx4QpTr7KdZ2wLbN\tjbswy3dpehpk3pxp",
 ]
 
 
@@ -824,6 +826,10 @@ def test_the_page_reads_a_paste_as_the_dashboard_does():
     assert by[_PASTE[1]]["pass"] == "p;w|d,1" and by[_PASTE[1]]["rec"] == "rec@outlook.com"
     assert by[_PASTE[3]]["pass"] == "Pw-first-4", "the password before the address"
     assert by[_PASTE[6]]["odd"] == ["sold 2 Oct"], "a piece it cannot place is said"
+    # A password in both cases is never a key, alone or before one (2026-10-11).
+    assert (by[_PASTE[-2]]["pass"], by[_PASTE[-2]]["key"], by[_PASTE[-2]]["error"]) == (
+        "Mx4QpTr7KdZ2wLbN", "", "")
+    assert (by[_PASTE[-1]]["pass"], by[_PASTE[-1]]["key"]) == ("Mx4QpTr7KdZ2wLbN", "JBSWY3DPEHPK3PXP")
 
 
 def test_the_page_also_reads_a_sellers_colons_dashes_and_both_factors():

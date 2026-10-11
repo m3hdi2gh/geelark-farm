@@ -4,7 +4,7 @@ The owner receives stock as a sheet and copies a range: the clipboard
 arrives tab-separated, in whatever column order that seller uses. So the
 delimiter is detected, not declared, and so is the column order - the
 address is the token with an `@`, an authenticator secret is the token
-shaped like base32, a second address on a Gmail row is its recovery
+shaped like base32 in one case, a second address on a Gmail row is its recovery
 address, and the password is whatever remains. Nothing here validates:
 that is `store.validate`'s job and the preview calls it per row, so a
 bad row is refused with a reason while the good rows still go in.
@@ -68,6 +68,15 @@ def _regroup(tokens: list[str]) -> tuple[str, list[str]]:
     return key, tokens[:at] + tokens[at + best:]
 
 
+def _both_cases(token: str) -> bool:
+    """Small and capital letters both: a password, never an authenticator
+    key, which comes in one case. A Gmail sold with a password and nothing
+    else - sixteen letters and digits, `Mx4QpTr7KdZ2wLbN`'s shape - was
+    refused as "could not tell the password from the 2fa key", and no
+    column order could add it (2026-10-11)."""
+    return any(c.islower() for c in token) and any(c.isupper() for c in token)
+
+
 def accounts(text: str) -> list[dict]:
     """One dict per non-empty line: address, password, secret, recovery,
     and `unread` - the pieces of the line nothing here could place.
@@ -88,7 +97,8 @@ def accounts(text: str) -> list[dict]:
         # letters is base32-shaped, so taking the first claimed the
         # password as the key and left the row reading "no password" on a
         # line that visibly had one (2026-09-07).
-        keys = [p for p in rest if _BASE32.match(p) and not p.isdigit()]
+        keys = [p for p in rest if _BASE32.match(p) and not p.isdigit()
+                and not _both_cases(p)]
         secret = keys[-1] if keys else ""
         rest = [p for p in rest if p != secret]
         if not secret:
